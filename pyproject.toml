@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "solar-forge-harness"
+version = "0.1.0"
+description = "A request-driven, provider-independent coding agent CLI"
+requires-python = ">=3.11"
+dependencies = ["prompt_toolkit>=3.0.52,<4"]
+
+[project.scripts]
+forge = "solar_forge.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+solar_forge = ["guidance/*.md"]
