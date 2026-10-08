@@ -8,7 +8,6 @@ from . import __version__
 from .agent import approve, run
 from .audit import Audit
 from .chat import ChatService
-from .chat_server import serve_chat
 from .context import bundled_guidance
 from .domain import Config, CONFIG_TEMPLATE, ForgeError, Request, REQUEST_TEMPLATE
 from .providers import HTTPProvider
@@ -25,11 +24,10 @@ def parser() -> argparse.ArgumentParser:
     request = commands.add_parser('request', help='Create a request template')
     request.add_argument('title')
     request.add_argument('--output', default='request.md')
-    chat = commands.add_parser('chat', help='Open a browser chat window with the configured model')
+    chat = commands.add_parser('chat', help='Open a terminal chat interface with the configured model')
     chat.add_argument('--provider', choices=['openai', 'anthropic', 'ollama', 'compatible'])
     chat.add_argument('--model')
-    chat.add_argument('--port', type=int, default=0, help='Local port (default: automatically choose a free port)')
-    chat.add_argument('--no-browser', action='store_true', help='Print the chat URL without opening a browser')
+    chat.add_argument('--resume', help='Project-relative saved chat audit to reopen')
     for name, help_text in [('prepare', 'Discover documentation and generate domain questions'),
                             ('discover', 'Retry discovery for a run after a failed model call'),
                             ('plan', 'Generate a plan after all questions have answers'),
@@ -139,7 +137,8 @@ def main(argv=None) -> int:
         workspace.max_file_bytes = config.max_file_bytes
         provider = HTTPProvider(config)
         if args.command == 'chat':
-            serve_chat(ChatService(workspace, config, provider), port=args.port, open_browser=not args.no_browser)
+            from .terminal_chat import run_terminal_chat
+            run_terminal_chat(ChatService(workspace, config, provider), resume=args.resume)
             return 0
         if args.command == 'prepare':
             audit = prepare(workspace, config, args.request, provider)
