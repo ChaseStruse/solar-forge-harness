@@ -1,5 +1,7 @@
 # Forge chat implementation plan
 
+This browser design was superseded by [terminal chat](terminal-chat-implementation-plan.md) at the user’s request.
+
 1. Commit this plan and structured request before implementation.
 2. Add a provider-independent chat service using existing project context,
    audit artifacts, and Provider.complete. Persist a pending user turn before

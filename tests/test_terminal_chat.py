@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.data_structures import Size
 
 from solar_forge.chat import ChatService
 from solar_forge.domain import Config, ForgeError
@@ -15,12 +16,17 @@ from solar_forge.workspace import Workspace
 from test_chat import TextProvider
 
 
+class WideOutput(DummyOutput):
+    def get_size(self):
+        return Size(rows=30, columns=120)
+
+
 class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
     async def test_send_new_resume_and_failure_retry(self):
         with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
             provider = TextProvider('Hello', ForgeError('Offline'), 'Recovered')
             service = ChatService(Workspace(Path(tmp)), Config(model='test'), provider)
-            ui = TerminalChat(service, input=pipe, output=DummyOutput())
+            ui = TerminalChat(service, input=pipe, output=WideOutput())
             ui.composer.text = 'First question'
             await ui.send()
             saved = ui.current['id']
@@ -44,11 +50,11 @@ class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
     async def test_actual_keyboard_enter_newline_and_quit(self):
         with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
             service = ChatService(Workspace(Path(tmp)), Config(model='test'), TextProvider('Reply'))
-            ui = TerminalChat(service, input=pipe, output=DummyOutput())
+            ui = TerminalChat(service, input=pipe, output=WideOutput())
             task = asyncio.create_task(ui.run())
             try:
                 await asyncio.sleep(.05)
-                pipe.send_text('First line\x1b\rSecond line\r')
+                pipe.send_text('First linex\x7f\x1b\rSecond line\r')
                 for _ in range(100):
                     if ui.current and len(ui.current['messages']) == 2:
                         break
@@ -57,6 +63,9 @@ class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
                 pipe.send_text('\x0e')  # Ctrl+N
                 await asyncio.sleep(.05)
                 self.assertIsNone(ui.current)
+                pipe.send_text('\x0c\r')  # Ctrl+L focuses history, Enter reopens selection.
+                await asyncio.sleep(.05)
+                self.assertEqual(ui.current['title'], 'First line Second line')
                 pipe.send_text('\x11')  # Ctrl+Q
                 await asyncio.wait_for(task, timeout=2)
             finally:

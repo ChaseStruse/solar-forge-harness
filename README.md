@@ -30,7 +30,8 @@ python -m pip install -e .
 forge --help
 ```
 
-There are no runtime dependencies. Packaging uses setuptools. To run directly
+Terminal chat uses prompt_toolkit for full-screen rendering and keyboard input.
+The provider, workflow, and audit layers use the standard library. Packaging uses setuptools. To run directly
 from this checkout without installing:
 
 ```sh
@@ -114,35 +115,50 @@ Once you have configured `provider.kind` and `provider.model`, run:
 forge chat
 ```
 
-This opens a local browser window with your configured model, a conversation
-sidebar, and a message composer. Enter sends a message; Shift+Enter adds a new
-line. Start new chats or reopen saved conversations from the sidebar. Keep the
-terminal running while you chat; Ctrl-C closes the server after active replies
-have been saved. If your browser does not open, use the URL printed in the terminal.
+This opens a full-screen chat interface in your current terminal with the
+configured model, a scrollable conversation, saved-chat navigation, and a
+multiline composer. No browser or local web server is needed.
+
+| Key | Action |
+| --- | --- |
+| Enter | Send the message; open the selected chat when history is focused |
+| Alt+Enter (or Ctrl+J) | Insert a newline in the composer |
+| Tab / Shift+Tab | Move between panes |
+| Arrow keys | Move within the focused pane or select a saved chat |
+| PgUp / PgDn | Scroll the focused conversation/history pane |
+| Ctrl+N | Start a new chat |
+| Ctrl+L | Focus history; show numbered history on narrow terminals |
+| Ctrl+R | Retry a saved pending message |
+| Ctrl+Q / Ctrl+C / Ctrl+D | Exit after any active reply has been saved |
+
+On narrow terminals, use Ctrl+L, then type `/open NUMBER` in the composer to
+reopen a saved chat. Multiline paste is supported. Start directly in a saved
+conversation with `--resume`:
 
 ```sh
 forge chat --provider ollama --model YOUR_INSTALLED_MODEL
-forge chat --no-browser --port 8765
+forge chat --resume agentic_audit/forge-chat/RUN_ID
 forge --project /path/to/project chat
 ```
 
 Chat receives the configured project documentation and the current `request.md`
 if present. It helps discuss and refine requests; use `prepare`, `plan`, and `run`
 for approved implementation. It shares the existing provider adapters, so cloud
-providers require the same API-key environment variables. API keys stay in the
-Python process, and the local server accepts authenticated requests on loopback.
+providers require the same API-key environment variables.
 
 Conversations are stored under `agentic_audit/forge-chat/<run-id>/`, including
 `transcript.md`, `state.json`, context, events, and provider-call inputs/outputs.
-Messages persist before model calls; failed replies expose a retry button that
-reuses the pending message. Reopen a saved session to retry after restarting the
-server. Saved conversations from a different provider/model can be viewed, but
-start a new chat to send with the currently configured model.
+Messages persist before model calls; Ctrl+R retries that pending message after a
+failed reply. Existing conversations from the earlier browser UI remain compatible.
+Saved conversations from a different provider/model can be viewed, but start a
+new chat to send with the currently configured model.
 
-The first version displays complete replies rather than streaming. Conversation
-size and successful turns use `max_prompt_bytes` and `max_turns`; start a new chat
-when those limits are reached. Do not forcibly kill the terminal while a reply is
-active: stale audit locks need the same recovery procedure as agent runs below.
+Replies arrive in full rather than streaming. Conversation size and successful
+turns use `max_prompt_bytes` and `max_turns`; start a new chat when those limits
+are reached. Exiting while a reply is active waits for it to finish and save.
+Forced process termination can leave a stale audit lock; use the same recovery
+procedure as agent runs below. `forge chat` requires interactive terminal input
+and output. The former `--no-browser` and `--port` options have been removed.
 
 ## Workflow
 
