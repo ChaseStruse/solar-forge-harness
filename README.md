@@ -12,6 +12,17 @@ and change evidence inside the project.
 
 Python 3.11 or newer:
 
+For a user-level `forge` command available from any directory, install with uv
+from this checkout:
+
+```sh
+uv tool install --editable .
+forge --help
+```
+
+Alternatively, install into a virtual environment. With this option, activate
+the environment in each terminal before using `forge`:
+
 ```sh
 python -m venv .venv
 source .venv/bin/activate
