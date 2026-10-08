@@ -106,6 +106,44 @@ contracts follow the official [OpenAI Responses reference](https://developers.op
 [Claude Messages reference](https://platform.claude.com/docs/en/api/messages/create),
 and [Ollama chat reference](https://docs.ollama.com/api/chat).
 
+## Chat with your model
+
+Once you have configured `provider.kind` and `provider.model`, run:
+
+```sh
+forge chat
+```
+
+This opens a local browser window with your configured model, a conversation
+sidebar, and a message composer. Enter sends a message; Shift+Enter adds a new
+line. Start new chats or reopen saved conversations from the sidebar. Keep the
+terminal running while you chat; Ctrl-C closes the server after active replies
+have been saved. If your browser does not open, use the URL printed in the terminal.
+
+```sh
+forge chat --provider ollama --model YOUR_INSTALLED_MODEL
+forge chat --no-browser --port 8765
+forge --project /path/to/project chat
+```
+
+Chat receives the configured project documentation and the current `request.md`
+if present. It helps discuss and refine requests; use `prepare`, `plan`, and `run`
+for approved implementation. It shares the existing provider adapters, so cloud
+providers require the same API-key environment variables. API keys stay in the
+Python process, and the local server accepts authenticated requests on loopback.
+
+Conversations are stored under `agentic_audit/forge-chat/<run-id>/`, including
+`transcript.md`, `state.json`, context, events, and provider-call inputs/outputs.
+Messages persist before model calls; failed replies expose a retry button that
+reuses the pending message. Reopen a saved session to retry after restarting the
+server. Saved conversations from a different provider/model can be viewed, but
+start a new chat to send with the currently configured model.
+
+The first version displays complete replies rather than streaming. Conversation
+size and successful turns use `max_prompt_bytes` and `max_turns`; start a new chat
+when those limits are reached. Do not forcibly kill the terminal while a reply is
+active: stale audit locks need the same recovery procedure as agent runs below.
+
 ## Workflow
 
 ```sh

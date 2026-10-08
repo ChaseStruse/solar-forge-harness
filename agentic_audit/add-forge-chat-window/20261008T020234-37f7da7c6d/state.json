@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "title": "Add Forge chat window",
+  "status": "review_required",
+  "created_at": "2026-10-08T02:02:34.127726+00:00",
+  "questions": [],
+  "messages": [],
+  "turns": 0,
+  "run_kind": "development-session",
+  "request_path": "docs/requests/chat.md",
+  "verification": {
+    "automated_tests": 27,
+    "browser_checks": "passed",
+    "wheel_assets": "passed",
+    "live_model_calls": false
+  }
+}

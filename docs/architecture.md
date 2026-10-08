@@ -16,6 +16,31 @@ The UI, workflow rules, transport, and file operations have separate modules.
 | `agent.py` | Approved execution, action validation, write journal and recovery |
 | `workspace.py` | Project path boundaries, size checks, inventory, atomic writes |
 | `audit.py` | Run directories, checkpoints, events, artifacts, per-run locks |
+| `chat.py` | Plain conversation, pending-turn retry, transcripts, session history |
+| `chat_server.py` | Authenticated loopback HTTP transport and browser launcher |
+| `web/` | Packaged chat UI; no external scripts, fonts, or dependencies |
+
+## Browser chat
+
+`forge chat` uses the same Provider interface without the agent JSON-action
+prompt. It snapshots project guidance and the current request once per session.
+The server binds only to 127.0.0.1; an ephemeral URL-fragment token authenticates
+API requests. Host and Origin checks reject other web origins, and credentials
+remain server-side. The frontend renders conversation text through textContent
+under a restrictive content security policy.
+
+A session's `run_kind` is `chat` and its status is `chatting`, independent of the
+coding workflow state machine. Before a call, a pending user message is saved;
+after a successful reply, the message/reply pair is committed and the pending
+marker cleared. Retry preserves that same user turn. An audit lock serializes
+each session. Provider calls are not exactly-once: a process kill after a model
+reply but before its checkpoint can cause a repeated call on retry. Chat has no
+file-edit or command tools. Saved sessions belong to their original provider and
+model; sending with another configuration requires a new session.
+
+HTTP requests and responses use bounded bodies, and the UI waits for complete
+replies. The server remains in the launching terminal and finishes active reply
+threads when stopped. See the [chat implementation plan](chat-implementation-plan.md).
 
 ## State transitions
 

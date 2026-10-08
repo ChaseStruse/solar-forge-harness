@@ -20,11 +20,12 @@ function feedback(text, error = false) {
   $('feedback').className = error ? 'feedback error' : 'feedback';
 }
 function controls() {
-  $('send').disabled = busy || Boolean(current?.pending_message) || !$('message').value.trim();
-  $('new-chat').disabled = busy;
-  $('message').disabled = busy || Boolean(current?.pending_message);
+  const unavailable = busy || !config;
+  $('send').disabled = unavailable || Boolean(current?.pending_message) || !$('message').value.trim();
+  $('new-chat').disabled = unavailable;
+  $('message').disabled = unavailable || Boolean(current?.pending_message);
   $('retry').hidden = !current?.pending_message || busy;
-  document.querySelectorAll('[data-prompt]').forEach((el) => el.disabled = busy);
+  document.querySelectorAll('[data-prompt]').forEach((el) => el.disabled = unavailable);
   document.querySelectorAll('.session').forEach((el) => el.disabled = busy);
 }
 function render() {

@@ -90,7 +90,8 @@ class ChatServiceTests(unittest.TestCase):
 class ChatHTTPTests(unittest.TestCase):
     def test_http_auth_origin_assets_and_message(self):
         with tempfile.TemporaryDirectory() as tmp:
-            service = ChatService(Workspace(Path(tmp)), Config(model='test-model'), TextProvider('<script>alert(1)</script>'))
+            service = ChatService(Workspace(Path(tmp)), Config(model='test-model'),
+                                  TextProvider('<script>alert(1)</script>', ForgeError('Provider unavailable'), 'Recovered'))
             with ChatServer(service) as server:
                 thread = Thread(target=server.serve_forever, daemon=True)
                 thread.start()
@@ -117,6 +118,15 @@ class ChatHTTPTests(unittest.TestCase):
                     result = json.loads(fetch('/api/message', {'id': session['id'], 'message': 'hello'})[2])
                     self.assertEqual(result['messages'][-1]['content'], '<script>alert(1)</script>')
                     self.assertEqual(len(json.loads(fetch('/api/sessions')[2])['sessions']), 1)
+                    with self.assertRaises(HTTPError) as error:
+                        fetch('/api/message', {'id': session['id'], 'message': 'Retry me'})
+                    self.assertEqual(error.exception.code, 409)
+                    error.exception.close()
+                    pending = json.loads(fetch('/api/session?id=' + session['id'])[2])
+                    self.assertEqual(pending['pending_message'], 'Retry me')
+                    recovered = json.loads(fetch('/api/retry', {'id': session['id']})[2])
+                    self.assertEqual(len(recovered['messages']), 4)
+                    self.assertIsNone(recovered['pending_message'])
                     with self.assertRaises(HTTPError) as error:
                         fetch('/api/message', {'id': session['id'], 'message': 'hello', 'extra': 'x'})
                     self.assertEqual(error.exception.code, 400)
