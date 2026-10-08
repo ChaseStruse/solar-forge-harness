@@ -31,9 +31,13 @@ def parse_json(text: str) -> dict:
     return data
 
 
-def call(audit: Audit, provider: Provider, system: str, messages: list[dict]) -> str:
+def call(audit: Audit, provider: Provider, system: str, messages: list[dict], max_prompt_bytes: int = 500000) -> str:
     call_id = uuid.uuid4().hex
-    audit.write(f"calls/{call_id}-input.json", json.dumps({"system": system, "messages": messages}, indent=2))
+    serialized = json.dumps({"system": system, "messages": messages}, ensure_ascii=False)
+    if len(serialized.encode()) > max_prompt_bytes:
+        audit.event("provider_call_rejected", call_id=call_id, reason="prompt_budget")
+        raise ForgeError("Prompt exceeds max_prompt_bytes; narrow the request or adjust the configured budget.")
+    audit.write(f"calls/{call_id}-input.json", serialized)
     audit.event("provider_call_started", call_id=call_id)
     try:
         result = provider.complete(system, messages)
@@ -63,12 +67,12 @@ def questions_from(data: dict, sources: set[str], start: int = 1) -> list[dict]:
 
 
 def payload(audit: Audit, state: dict) -> dict:
-    return {"request": (audit.path / "request.md").read_text(),
+    return {"request": audit.read("request.md"),
             "context": json.loads((audit.path / "context.json").read_text()),
             "questions_and_answers": state["questions"]}
 
 
-def discover(audit: Audit, provider: Provider) -> None:
+def discover(audit: Audit, provider: Provider, max_prompt_bytes: int = 500000) -> None:
     state = audit.load()
     if state["status"] != "discovering":
         raise ForgeError("Discovery has already completed for this run.")
@@ -83,7 +87,7 @@ def discover(audit: Audit, provider: Provider) -> None:
         '{"questions":[{"question":"...","rationale":"decision this resolves",'
         '"sources":["request.md or a supplied documents key"]}]}. '
         'An empty array is permitted if no clarification is needed.')
-    data = parse_json(call(audit, provider, SYSTEM, [{"role": "user", "content": json.dumps(content)}]))
+    data = parse_json(call(audit, provider, SYSTEM, [{"role": "user", "content": json.dumps(content)}], max_prompt_bytes))
     sources = set(content["context"]["documents"]) | {"request.md"}
     state["questions"] = questions_from(data, sources)
     state["status"] = "awaiting_answers" if state["questions"] else "ready_to_plan"
@@ -103,7 +107,7 @@ def prepare(workspace: Workspace, config: Config, request_path: str, provider: P
     state.update({"request_path": request_path, "provider": config.kind, "model": config.model})
     audit.save(state)
     with audit.lock():
-        discover(audit, provider)
+        discover(audit, provider, config.max_prompt_bytes)
     return audit
 
 
@@ -126,7 +130,7 @@ def record_answer(audit: Audit, question_id: str, answer: str) -> None:
 
 def assert_current(workspace: Workspace, config: Config, audit: Audit) -> None:
     state = audit.load()
-    if workspace.read(state["request_path"]) != (audit.path / "request.md").read_text():
+    if workspace.read(state["request_path"]) != audit.read("request.md"):
         raise ForgeError("Request changed since discovery. Prepare a new run.")
     current = collect(workspace, config)
     previous = json.loads((audit.path / "context.json").read_text())
@@ -146,7 +150,7 @@ def plan(workspace: Workspace, config: Config, audit: Audit, provider: Provider)
         'decisions grounded in recorded answers, files affected, acceptance-criterion '
         'verification, and proposed user-run checks. No shell runner exists. '
         'Honor changes already made if this is a revised plan.')
-    data = parse_json(call(audit, provider, SYSTEM, [{"role": "user", "content": json.dumps(content)}]))
+    data = parse_json(call(audit, provider, SYSTEM, [{"role": "user", "content": json.dumps(content)}], config.max_prompt_bytes))
     text = data.get("plan")
     if not isinstance(text, str) or not text.strip():
         raise ForgeError("Model must return a nonempty plan string.")

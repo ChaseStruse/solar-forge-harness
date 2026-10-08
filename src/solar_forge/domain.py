@@ -33,6 +33,7 @@ timeout = 120
 max_turns = 30
 max_file_bytes = 100000
 max_context_bytes = 200000
+max_prompt_bytes = 500000
 # Add relevant domain documentation here; all paths are project-relative.
 docs = ["README.md", "AGENTS.md", ".forge/standards/coding.md", ".forge/standards/architecture.md", ".forge/standards/deployment.md", ".forge/standards/git.md", ".forge/standards/testing.md"]
 '''
@@ -82,6 +83,7 @@ class Config:
     max_turns: int = 30
     max_file_bytes: int = 100000
     max_context_bytes: int = 200000
+    max_prompt_bytes: int = 500000
     docs: list[str] = field(default_factory=lambda: ["README.md", "AGENTS.md"])
 
     @classmethod
@@ -90,11 +92,11 @@ class Config:
             data = tomllib.loads(path.read_text())
             provider, harness = data.get("provider", {}), data.get("harness", {})
             config = cls(**provider, **harness)
-        except (OSError, TypeError, tomllib.TOMLDecodeError) as exc:
+        except (OSError, TypeError, AttributeError, tomllib.TOMLDecodeError) as exc:
             raise ForgeError(f"Invalid .forge/config.toml: {exc}") from exc
         if config.kind not in {"openai", "anthropic", "ollama", "compatible"}:
             raise ForgeError("Provider must be openai, anthropic, ollama, or compatible.")
-        for name in ("timeout", "max_turns", "max_file_bytes", "max_context_bytes"):
+        for name in ("timeout", "max_turns", "max_file_bytes", "max_context_bytes", "max_prompt_bytes"):
             if type(getattr(config, name)) is not int or getattr(config, name) <= 0:
                 raise ForgeError(f"{name} must be a positive integer.")
         for name in ("kind", "model", "base_url", "api_key_env"):

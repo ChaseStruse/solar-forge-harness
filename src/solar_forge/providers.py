@@ -62,7 +62,7 @@ class HTTPProvider:
         if url.scheme == "http" and not local_host(url.hostname):
             raise ForgeError("Remote provider endpoints require HTTPS; HTTP is allowed only on loopback.")
         env = config.api_key_env or {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
-                                    "compatible": "OPENAI_API_KEY", "ollama": ""}[config.kind]
+                                    "compatible": "LOCAL_MODEL_API_KEY", "ollama": ""}[config.kind]
         self.key = os.environ.get(env, "") if env else ""
         if not self.key and (config.kind in {"openai", "anthropic"} or
                              (config.kind == "compatible" and not local_host(url.hostname))):
@@ -98,6 +98,8 @@ class HTTPProvider:
                     raise ForgeError("Claude response was truncated or needs unsupported tools.")
                 result = "\n".join(part["text"] for part in data["content"] if part.get("type") == "text")
             elif cfg.kind == "ollama":
+                if data.get("done") is False or data.get("done_reason") == "length":
+                    raise ForgeError("Ollama response did not complete; no action was executed.")
                 result = data["message"]["content"]
             else:
                 if data["choices"][0].get("finish_reason") not in (None, "stop"):
@@ -106,5 +108,5 @@ class HTTPProvider:
             if not isinstance(result, str) or not result.strip():
                 raise ForgeError("Provider returned no usable text.")
             return result
-        except (KeyError, IndexError, TypeError) as exc:
+        except (KeyError, IndexError, TypeError, AttributeError) as exc:
             raise ForgeError("Provider returned an unexpected response shape.") from exc

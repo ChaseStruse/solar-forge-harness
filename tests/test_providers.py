@@ -49,3 +49,11 @@ class ProviderTests(unittest.TestCase):
     def test_truncated_response_rejected(self, _):
         with self.assertRaises(ForgeError):
             HTTPProvider(Config(kind='compatible', model='local')).complete('system', [])
+
+    def test_ollama_incomplete_and_malformed_outputs_rejected(self):
+        for response in ({'done': False, 'message': {'content': 'partial'}},
+                         {'done_reason': 'length', 'message': {'content': 'partial'}},
+                         {'message': {'content': None}}):
+            with patch('solar_forge.providers.post_json', return_value=response):
+                with self.assertRaises(ForgeError):
+                    HTTPProvider(Config(model='local')).complete('system', [])

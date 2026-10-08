@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 from solar_forge.domain import Config, ForgeError
-from solar_forge.workflow import plan, prepare, record_answer
+from solar_forge.workflow import call, plan, prepare, record_answer
 from solar_forge.workspace import Workspace
 from test_foundation import REQUEST
 
@@ -60,3 +60,12 @@ class WorkflowTests(unittest.TestCase):
             bad = {'questions': [{'question': 'Q', 'rationale': 'R', 'sources': ['invented.md']}]}
             with self.assertRaises(ForgeError):
                 prepare(ws, Config(), 'request.md', ScriptedProvider(bad))
+
+    def test_prompt_budget_stops_before_provider_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Workspace(Path(tmp))
+            ws.write('request.md', REQUEST)
+            audit = prepare(ws, Config(), 'request.md', ScriptedProvider({'questions': []}))
+            with self.assertRaises(ForgeError):
+                call(audit, ScriptedProvider(), 'system', [{'role': 'user', 'content': 'large'}], 1)
+            self.assertIn('prompt_budget', (audit.path / 'events.jsonl').read_text())

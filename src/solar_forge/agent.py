@@ -54,6 +54,7 @@ def validate_action(action: dict) -> str:
 
 
 def write_file(workspace: Workspace, config: Config, audit: Audit, state: dict, action: dict) -> dict:
+    assert_current(workspace, config, audit)
     relative, content = action['path'], action['content']
     target = workspace.path(relative, write=True)
     protected = {workspace.path(p) for p in config.docs} | {workspace.path(state['request_path'])}
@@ -65,7 +66,7 @@ def write_file(workspace: Workspace, config: Config, audit: Audit, state: dict, 
     journal = audit.path / change_id / 'metadata.json'
     if journal.exists():
         meta = json.loads(journal.read_text())
-        before = (audit.path / change_id / 'before.txt').read_text()
+        before = audit.read(change_id + '/before.txt')
     else:
         existed = target.exists()
         before = workspace.read(relative) if existed else ''
@@ -145,7 +146,7 @@ def run(workspace: Workspace, config: Config, audit: Audit, provider: Provider) 
             if not state.get('pending_action'):
                 state['turns'] += 1
                 audit.save(state)
-                text = call(audit, provider, system, state['messages'])
+                text = call(audit, provider, system, state['messages'], config.max_prompt_bytes)
                 state['messages'].append({'role': 'assistant', 'content': text})
                 try:
                     action = parse_json(text)

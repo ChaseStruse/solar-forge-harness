@@ -141,7 +141,7 @@ def main(argv=None) -> int:
         audit = Audit.open(workspace, args.audit)
         with audit.lock():
             if args.command == 'discover':
-                discover(audit, provider)
+                discover(audit, provider, config.max_prompt_bytes)
             elif args.command == 'plan':
                 plan(workspace, config, audit, provider)
                 print((audit.path / 'plan.md').read_text())

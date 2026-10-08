@@ -51,6 +51,10 @@ class Audit:
     def save(self, state: dict) -> None:
         self.write("state.json", json.dumps(state, indent=2, ensure_ascii=False) + "\n")
 
+    def read(self, name: str) -> str:
+        # Preserve CRLF exactly, including request and change snapshots.
+        return (self.path / name).read_bytes().decode("utf-8")
+
     def load(self) -> dict:
         try:
             state = json.loads((self.path / "state.json").read_text())
