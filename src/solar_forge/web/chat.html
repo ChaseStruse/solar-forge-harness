@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Forge chat</title>
+  <link rel="stylesheet" href="/chat.css">
+  <script src="/chat.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar" aria-label="Conversations">
+    <a class="brand" href="/"> <span class="brand-mark">F</span> Solar Forge</a>
+    <button id="new-chat" class="new-chat" disabled>＋ <span>New chat</span></button>
+    <div class="section-label">CONVERSATIONS</div>
+    <nav id="sessions" aria-label="Saved chats"></nav>
+    <div class="sidebar-footer"><span class="status-dot"></span> Project-local history <small id="project">Connecting…</small></div>
+  </aside>
+  <main>
+    <header><div><span class="header-label">CHAT</span><h1 id="chat-title">New chat</h1></div><div class="model-pill"><span class="status-dot"></span><span id="model">Connecting…</span></div></header>
+    <div id="scroll-area" class="scroll-area">
+      <section id="welcome" class="welcome">
+        <div class="welcome-mark">F</div>
+        <div class="eyebrow">A LITTLE CLARITY. A BETTER BUILD.</div>
+        <h2>What are we building?</h2>
+        <p>Think through an idea, explore your project, or shape your next request with your chosen model.</p>
+        <div class="suggestions">
+          <button data-prompt="Help me turn my idea into a clear request with acceptance criteria."><span>↗</span><strong>Shape a request</strong><small>From an idea to a concrete outcome</small></button>
+          <button data-prompt="Review the supplied project guidance and identify architectural decisions we should clarify."><span>◇</span><strong>Explore the architecture</strong><small>Understand boundaries and tradeoffs</small></button>
+          <button data-prompt="Help me define a verification plan for the current request."><span>✓</span><strong>Plan the checks</strong><small>Make acceptance criteria observable</small></button>
+        </div>
+      </section>
+      <section id="messages" class="messages" aria-label="Chat messages" aria-live="polite"></section>
+    </div>
+    <div class="composer-area">
+      <div id="feedback" class="feedback" role="status" aria-live="polite"></div>
+      <button id="retry" class="retry" hidden>Retry pending message</button>
+      <form id="composer" class="composer">
+        <label for="message" class="sr-only">Message your model</label>
+        <textarea id="message" placeholder="Message your model…" rows="1" maxlength="100000" disabled></textarea>
+        <button id="send" type="submit" aria-label="Send message" title="Send message" disabled>↑</button>
+      </form>
+      <p class="composer-note">Enter to send · Shift+Enter for a new line <span>Chat helps you plan. Use forge run to apply changes.</span></p>
+    </div>
+  </main>
+</body>
+</html>

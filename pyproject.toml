@@ -16,4 +16,4 @@ forge = "solar_forge.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-solar_forge = ["guidance/*.md"]
+solar_forge = ["guidance/*.md", "web/*.html", "web/*.css", "web/*.js"]
