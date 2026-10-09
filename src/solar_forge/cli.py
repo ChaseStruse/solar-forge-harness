@@ -8,9 +8,9 @@ from . import __version__
 from .agent import approve, run
 from .audit import Audit
 from .chat import ChatService
-from .context import bundled_guidance
-from .domain import Config, CONFIG_TEMPLATE, ForgeError, Request, REQUEST_TEMPLATE
+from .domain import Config, ForgeError, REQUEST_TEMPLATE
 from .providers import HTTPProvider
+from .setup import create, initialize
 from .workflow import discover, plan, prepare, record_answer
 from .workspace import Workspace
 
@@ -20,7 +20,8 @@ def parser() -> argparse.ArgumentParser:
     cli.add_argument('--version', action='version', version=__version__)
     cli.add_argument('--project', type=Path, default=Path.cwd(), help='Project root (default: current directory)')
     commands = cli.add_subparsers(dest='command', required=True)
-    commands.add_parser('init', help='Create request, configuration, and editable project guidance')
+    init = commands.add_parser('init', help='Set up your model, documents, and project guidance')
+    init.add_argument('--no-interactive', action='store_true', help='Create setup templates without prompts')
     request = commands.add_parser('request', help='Create a request template')
     request.add_argument('title')
     request.add_argument('--output', default='request.md')
@@ -49,19 +50,6 @@ def parser() -> argparse.ArgumentParser:
     status = commands.add_parser('status', help='Show run states or details for one run')
     status.add_argument('audit', nargs='?')
     return cli
-
-
-def create(workspace: Workspace, name: str, content: str, *, internal=False) -> bool:
-    path = workspace.path(name, write=True, internal=internal)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with path.open('x', encoding='utf-8') as handle:
-            handle.write(content)
-        print(f'Created {name}')
-        return True
-    except FileExistsError:
-        print(f'Kept existing {name}')
-        return False
 
 
 def answer_interactively(audit: Audit) -> None:
@@ -93,11 +81,7 @@ def main(argv=None) -> int:
         if not workspace.root.is_dir():
             raise ForgeError('Project root must be an existing directory.')
         if args.command == 'init':
-            create(workspace, '.forge/config.toml', CONFIG_TEMPLATE, internal=True)
-            create(workspace, 'request.md', REQUEST_TEMPLATE)
-            for name, text in bundled_guidance().items():
-                create(workspace, '.forge/standards/' + name.split('/')[-1], text, internal=True)
-            print('Edit request.md, .forge/config.toml, and .forge/standards before preparing a run.')
+            initialize(workspace, interactive=not args.no_interactive and sys.stdin.isatty())
             return 0
         if args.command == 'request':
             if '\n' in args.title or '\r' in args.title or not args.title.strip():
@@ -175,7 +159,9 @@ def main(argv=None) -> int:
         print(f'forge: {exc}', file=sys.stderr)
         return 1
     except (KeyboardInterrupt, EOFError):
-        print('\nStopped. Saved answers and run checkpoints remain in agentic_audit.', file=sys.stderr)
+        message = ('Setup stopped. Existing files were kept. Run forge init to try again.' if args.command == 'init'
+                   else 'Stopped. Saved answers and run checkpoints remain in agentic_audit.')
+        print('\n' + message, file=sys.stderr)
         return 130
 
 

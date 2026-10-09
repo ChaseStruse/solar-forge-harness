@@ -47,6 +47,19 @@ def post_json(url: str, headers: dict, payload: dict, timeout: int) -> dict:
         raise ForgeError("Provider connection failed or returned invalid JSON; check endpoint and timeout.") from exc
 
 
+def validate_base_url(base: str) -> None:
+    try:
+        url = urlparse(base)
+        port = url.port
+    except ValueError as exc:
+        raise ForgeError("Use a valid service address, including a valid host and port.") from exc
+    if (url.scheme not in {"https", "http"} or not url.hostname or url.username
+            or url.password or url.query or url.fragment or port == 0):
+        raise ForgeError("Provider base_url must be an HTTP(S) URL without embedded credentials or query.")
+    if url.scheme == "http" and not local_host(url.hostname):
+        raise ForgeError("Remote provider endpoints require HTTPS; HTTP is allowed only on loopback.")
+
+
 class HTTPProvider:
     def __init__(self, config: Config):
         self.config = config
@@ -55,12 +68,8 @@ class HTTPProvider:
         defaults = {"openai": "https://api.openai.com/v1", "anthropic": "https://api.anthropic.com/v1",
                     "ollama": "http://localhost:11434", "compatible": "http://localhost:8080/v1"}
         self.base = (config.base_url or defaults[config.kind]).rstrip("/")
+        validate_base_url(self.base)
         url = urlparse(self.base)
-        if (url.scheme not in {"https", "http"} or not url.hostname or url.username
-                or url.password or url.query or url.fragment):
-            raise ForgeError("Provider base_url must be an HTTP(S) URL without embedded credentials or query.")
-        if url.scheme == "http" and not local_host(url.hostname):
-            raise ForgeError("Remote provider endpoints require HTTPS; HTTP is allowed only on loopback.")
         env = config.api_key_env or {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
                                     "compatible": "LOCAL_MODEL_API_KEY", "ollama": ""}[config.kind]
         self.key = os.environ.get(env, "") if env else ""
