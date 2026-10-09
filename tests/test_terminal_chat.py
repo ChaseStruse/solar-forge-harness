@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 import tempfile
 from threading import Event
@@ -10,10 +11,13 @@ from prompt_toolkit.output import DummyOutput
 from prompt_toolkit.data_structures import Size
 
 from solar_forge.chat import ChatService
+from solar_forge.audit import Audit
 from solar_forge.domain import Config, ForgeError
 from solar_forge.terminal_chat import TerminalChat, display, run_terminal_chat
 from solar_forge.workspace import Workspace
 from test_chat import TextProvider
+from test_foundation import REQUEST
+from test_workflow import QUESTION
 
 
 class WideOutput(DummyOutput):
@@ -22,6 +26,89 @@ class WideOutput(DummyOutput):
 
 
 class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
+    async def test_workflow_actions_and_model_advice_inside_window(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.write('request.md', REQUEST)
+            provider = TextProvider(json.dumps(QUESTION), 'Choose UTC.',
+                                    json.dumps({'plan': '# Plan\nCreate export.py.'}),
+                                    json.dumps({'tool': 'write_file', 'path': 'export.py', 'content': 'TIMEZONE = "UTC"\n'}),
+                                    json.dumps({'tool': 'finish', 'summary': 'Created export.py.', 'verification': 'Inspect it.'}))
+            service = ChatService(workspace, Config(model='test'), provider)
+            ui = TerminalChat(service, input=pipe, output=WideOutput())
+            for message in ('/prepare', '/answer', '/ask\nWhich timezone should I use?'):
+                ui.composer.text = message
+                await ui.send()
+            audit = Audit.open(workspace, ui.current['workflow_run'])
+            self.assertIsNone(audit.load()['questions'][0]['answer'])
+            self.assertIn('Choose UTC', ui.conversation.text)
+            self.assertEqual(ui.current['input_mode'], 'answer')
+            self.assertIn('Which timezone should I use?', provider.calls[1][1][-1]['content'])
+            ui.composer.text = 'UTC'
+            await ui.send()
+            self.assertEqual(audit.load()['questions'][0]['answer'], 'UTC')
+            ui.composer.text = '/plan'
+            await ui.send()
+            self.assertIn('/approve', ui.current['workflow_hint'])
+            self.assertFalse((root / 'export.py').exists())
+            ui.composer.text = '/approve'
+            await ui.send()
+            self.assertEqual((root / 'export.py').read_text(), 'TIMEZONE = "UTC"\n')
+            self.assertIn('review_required', ui.conversation.text)
+            self.assertIsNone(ui.current['pending_message'])
+            ui.composer.text = '/changes'
+            await ui.send()
+            self.assertIn('+TIMEZONE = "UTC"', ui.conversation.text)
+
+    async def test_request_drafting_can_ask_and_resume_after_failed_reply(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            root = Path(tmp)
+            service = ChatService(Workspace(root), Config(model='test'),
+                                  TextProvider(ForgeError('Offline'), 'Describe the desired user outcome.'))
+            ui = TerminalChat(service, input=pipe, output=DummyOutput())
+            ui.composer.text = '/request Calculator'
+            await ui.send()
+            ui.composer.text = '/ask What should I put in the description?'
+            await ui.send()
+            self.assertEqual(ui.current['input_mode'], 'request')
+            self.assertEqual(ui.current['pending_message'], 'What should I put in the description?')
+            await ui.send(retry=True)
+            self.assertIn('Describe the desired user outcome', ui.conversation.text)
+            for message in ('Build a calculator.', 'Please help me work out the details.', 'Addition works', '/save-request'):
+                ui.composer.text = message
+                await ui.send()
+            self.assertIn('# Request: Calculator', (root / 'request.md').read_text())
+            self.assertIsNone(ui.current['input_mode'])
+
+    async def test_keyboard_workflow_commands_require_explicit_approval(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            workspace = Workspace(Path(tmp))
+            workspace.write('request.md', REQUEST)
+            provider = TextProvider(json.dumps({'questions': []}), json.dumps({'plan': '# Plan\nInspect the project.'}),
+                                    json.dumps({'tool': 'finish', 'summary': 'Ready for review.', 'verification': 'Inspect manually.'}))
+            ui = TerminalChat(ChatService(workspace, Config(model='test'), provider), input=pipe, output=WideOutput())
+            task = asyncio.create_task(ui.run())
+            try:
+                await asyncio.sleep(.05)
+                for message, pairs in (('/prepare', 2), ('/plan', 4), ('/approve', 6)):
+                    pipe.send_text(message + '\r')
+                    for _ in range(100):
+                        if ui.current and len(ui.current['messages']) >= pairs and not ui.busy:
+                            break
+                        await asyncio.sleep(.01)
+                    self.assertEqual(len(ui.current['messages']), pairs)
+                    state = Audit.open(workspace, ui.current['workflow_run']).load()
+                    if message != '/approve':
+                        self.assertFalse(state.get('approved_plan'))
+                self.assertEqual(state['status'], 'review_required')
+                pipe.send_text('\x11')
+                await asyncio.wait_for(task, timeout=2)
+            finally:
+                if ui.app.is_running:
+                    ui.app.exit()
+                await task
+
     async def test_send_new_resume_and_failure_retry(self):
         with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
             provider = TextProvider('Hello', ForgeError('Offline'), 'Recovered')

@@ -33,7 +33,7 @@ class TerminalChat:
         self.sessions = []
         self.busy = False
         self.exit_requested = False
-        self.notice = 'Enter sends. Alt+Enter adds a line. Ctrl+N starts a new chat.'
+        self.notice = 'Enter sends. Alt+Enter adds a line. /help lists actions.'
         self.history = TextArea(read_only=True, scrollbar=True, wrap_lines=False, width=Dimension.exact(28),
                                 style='class:history')
         self.conversation = TextArea(read_only=True, scrollbar=True, wrap_lines=True, style='class:conversation')
@@ -44,6 +44,9 @@ class TerminalChat:
             ConditionalContainer(Frame(self.history, title='Saved chats'),
                                  filter=Condition(lambda: self.app.output.get_size().columns >= 85)),
             HSplit([Frame(self.conversation, title=lambda: display(self.current['title']) if self.current else 'New chat'),
+                    Label(lambda: display(self.current.get('workflow_hint', '') if self.current else
+                                          'Start: /request or /prepare. Continue: /runs. Help: /help.'),
+                          style='class:workflow'),
                     Label(lambda: display(self.notice), style='class:status'),
                     Frame(self.composer, title='Message · Enter send / Alt+Enter new line')]),
         ], padding=1)
@@ -52,13 +55,15 @@ class TerminalChat:
                   display(self.current['provider'] + ' / ' + self.current['model'] if self.current else
                           self.service.config.kind + ' / ' + self.service.config.model), style='class:header'),
             body,
-            Label(' Ctrl+N New  Ctrl+L History  Ctrl+R Retry  Tab Next pane  PgUp/PgDn Scroll  Ctrl+Q Quit',
+            Label(lambda: (' /help Actions  Ctrl+L History  Ctrl+R Retry  Ctrl+Q Quit'
+                           if self.app.output.get_size().columns < 85 else
+                           ' /help Actions  Ctrl+N New  Ctrl+L History  Ctrl+R Retry  Tab Next pane  Ctrl+Q Quit'),
                   style='class:footer'),
         ])
         self.app = Application(layout=Layout(root, focused_element=self.composer), key_bindings=keys,
                                full_screen=True, mouse_support=True, input=input, output=output,
                                style=Style.from_dict({'header': 'bg:#c4e29c #182119 bold',
-                                   'footer': 'bg:#252e22 #c4e29c', 'status': '#aebb9f',
+                                   'footer': 'bg:#252e22 #c4e29c', 'status': '#aebb9f', 'workflow': '#c4e29c',
                                    'history': 'bg:#111412 #919b91', 'conversation': 'bg:#161817 #e7ebe6',
                                    'composer': 'bg:#20261f #e7ebe6', 'frame.border': '#637951',
                                    'frame.label': '#c4e29c bold'}))
@@ -124,7 +129,7 @@ class TerminalChat:
         def quit(event):
             if self.busy:
                 self.exit_requested = True
-                self.notice = 'Closing after the active reply is saved…'
+                self.notice = 'Closing after the active action and its progress are saved…'
                 self.app.invalidate()
             else:
                 event.app.exit()
@@ -162,18 +167,25 @@ class TerminalChat:
     def render(self) -> None:
         if not self.current:
             text = ('What are we building?\n\n'
-                    'Think through an idea, explore your project, or shape your next request.\n\n'
-                    'Your configured model receives project guidance and request.md if present.\n'
-                    'Conversations are saved in agentic_audit.\n\n'
-                    'Tab moves between history, conversation, and composer.\n'
-                    'Chat helps plan; use forge run for approved implementation.')
+                    'Ask your model for help, or use these actions:\n\n'
+                    '  /request   Write a request, one question at a time\n'
+                    '  /prepare   Find questions in request.md\n'
+                    '  /answer    Record answers (use /ask for model advice)\n'
+                    '  /plan      Create and review a coding plan\n'
+                    '  /approve   Approve this plan and start coding\n'
+                    '  /runs      Continue an existing coding run\n'
+                    '  /next      Take the next step; approval is still required\n'
+                    '  /help      See all actions\n\n'
+                    'Use /ask TEXT for advice while drafting or answering.\n'
+                    'Requests, project guidance, and selected run details go to your model.\n'
+                    'Your conversation and progress are saved in agentic_audit.')
         else:
             text = '\n\n'.join(('You' if m['role'] == 'user' else 'Forge') + '\n' + display(m['content'])
                                for m in self.current['messages'])
             if self.current['pending_message']:
                 text += '\n\nYou (reply pending)\n' + display(self.current['pending_message'])
         self.conversation.text = text
-        self.conversation.buffer.cursor_position = len(text)
+        self.conversation.buffer.cursor_position = len(text) if self.current else 0
         self.app.invalidate()
 
     async def send(self, *, retry: bool = False) -> None:
@@ -200,26 +212,46 @@ class TerminalChat:
             self.notice = 'Retry the saved message with Ctrl+R, or start a new chat with Ctrl+N.'
             self.app.invalidate()
             return
+        # /ask explicitly consults the model while a request/answer prompt is active.
+        parts = message.split(maxsplit=1)
+        asking = not retry and bool(parts) and parts[0].lower() == '/ask'
+        if asking:
+            question = parts[1].strip() if len(parts) > 1 else ''
+            if not question:
+                self.notice = 'Use /ask followed by your question.'
+                self.app.invalidate()
+                return
+        command = not retry and not asking and (message.startswith('/') or
+                                                bool(self.current and self.current.get('input_mode')))
         self.busy = True
-        self.notice = 'Your model is thinking…'
+        self.notice = ('Coding… Your progress and changes are saved in the run audit.' if message == '/approve' else
+                       'Working on your request…' if command else 'Your model is thinking…')
         try:
             if self.current is None:
                 self.current = self.service.new()
+            if not retry and not command:
+                self.current['pending_message'] = question if asking else message
             if not retry:
-                self.current['pending_message'] = message
                 self.composer.buffer.set_document(Document(''), bypass_readonly=True)
             self.render()
-            self.current = await asyncio.to_thread(self.service.send, self.current['id'],
-                                                  None if retry else message, retry=retry)
-            self.notice = 'Reply saved. Enter sends your next message.'
+            if command:
+                self.current = await asyncio.to_thread(self.service.command, self.current['id'], message)
+                self.notice = ('Action could not finish. See the details above.' if self.current.get('command_error')
+                               else 'Progress saved. Follow the next step above, or ask your model for help.')
+            else:
+                self.current = await asyncio.to_thread(self.service.send, self.current['id'],
+                                                      None if retry else question if asking else message, retry=retry)
+                self.notice = 'Reply saved. Enter sends your next message.'
         except (ForgeError, OSError) as exc:
-            self.notice = display(str(exc)) + '  Ctrl+R retries; Ctrl+N starts a new chat.'
+            self.notice = display(str(exc)) + ('  Use /status to check progress.' if command else
+                                               '  Ctrl+R retries; Ctrl+N starts a new chat.')
             if self.current:
                 self.current = self.service.get(self.current['id'])
             if not retry and (not self.current or not self.current['pending_message']):
                 self.composer.buffer.set_document(Document(message, len(message)), bypass_readonly=True)
         except Exception:
-            self.notice = 'Reply failed. Inspect the audit and use Ctrl+R to retry.'
+            self.notice = ('Action stopped. Use /status to check saved progress.' if command else
+                           'Reply failed. Inspect the audit and use Ctrl+R to retry.')
             if self.current:
                 self.current = self.service.get(self.current['id'])
         finally:

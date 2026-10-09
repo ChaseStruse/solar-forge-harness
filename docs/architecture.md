@@ -17,20 +17,22 @@ The UI, workflow rules, transport, and file operations have separate modules.
 | `agent.py` | Approved execution, action validation, write journal and recovery |
 | `workspace.py` | Project path boundaries, size checks, inventory, atomic writes |
 | `audit.py` | Run directories, checkpoints, events, artifacts, per-run locks |
-| `chat.py` | Plain conversation, pending-turn retry, transcripts, session history |
+| `chat.py` | Conversation and explicit workflow actions, pending-turn retry, transcripts, session history |
+| `chat_workflow.py` | Chat command routing, request drafting, run selection, review and approval |
 | `terminal_chat.py` | Full-screen terminal presentation, keyboard actions, background replies |
 
 ## Terminal chat
 
 `forge chat` uses the same Provider interface without the agent JSON-action
-prompt. It snapshots project guidance and the current request once per session.
+prompt. It refreshes project guidance, the current request, and selected coding
+run details for each conversational call.
 TerminalChat presents history, conversation, status, and a multiline composer
 using prompt_toolkit. No HTTP chat transport or browser assets are shipped.
 The CLI imports this presentation only when launching chat, keeping the other
 commands independent of terminal rendering. Model text is displayed literally
 with terminal-control sequences removed.
 
-Synchronous provider calls run in a worker thread through asyncio.to_thread.
+Synchronous provider calls and workflow actions run in a worker thread through asyncio.to_thread.
 The UI handles keyboard events while waiting and prevents overlapping actions.
 Exit requests during a call wait until its response or failure is persisted.
 The same ChatService backs terminal chat and previously saved browser sessions.
@@ -40,9 +42,26 @@ coding workflow state machine. Before a call, a pending user message is saved;
 after a successful reply, the message/reply pair is committed and the pending
 marker cleared. Retry preserves that same user turn. An audit lock serializes
 each session. Provider calls are not exactly-once: a process kill after a model
-reply but before its checkpoint can cause a repeated call on retry. Chat has no
-file-edit or command tools. Saved sessions belong to their original provider and
+reply but before its checkpoint can cause a repeated call on retry. Conversational
+model replies have no file-edit or command tools. User-entered slash commands
+route to the same prepare/answer/plan/run modules used by the CLI. Saved sessions belong to their original provider and
 model; sending with another configuration requires a new session.
+
+The chat state persists `workflow_run`, request drafts, an optional question being
+answered, and the hash of the plan displayed for review. `/request` gathers fields
+without changing project files; `/save-request` explicitly writes the validated
+draft, checking that an existing request has not changed since drafting began.
+During drafting or answer entry, plain text fills the prompt; `/ask` sends a
+conversation turn without recording it as a workflow answer.
+
+`/plan` and `/run` display a plan and record its exact hash. `/approve` checks that
+hash, the selected run's model, and unchanged request/documentation under the run
+lock before approving and executing. Provider text cannot invoke this path.
+Commands and results are saved in the chat transcript; coding calls and changes
+remain in the selected coding run's audit. Preparation links its new run to the
+chat before discovery, so provider failures can be retried with `/discover`.
+New questions, interrupted execution, and run reopening retain the existing
+workflow state machine and approval rules. `/changes` displays saved diffs.
 
 Conversation and request limits remain enforced by ChatService and the provider
 adapters. See the [terminal chat implementation plan](terminal-chat-implementation-plan.md).

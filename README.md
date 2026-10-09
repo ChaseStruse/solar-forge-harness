@@ -46,9 +46,39 @@ Run inside the project you want the agent to work on:
 forge init
 ```
 
-This creates `request.md`, `.forge/config.toml`, and editable guidance in
-`.forge/standards/`. Existing files are preserved. Customize the guidance for your
-application and replace the request template:
+Forge walks you through three steps:
+
+1. **Choose your model service.** Pick Ollama, OpenAI, Claude, or an
+   OpenAI-compatible server. Enter your model name, keep or change the service
+   address, and choose the API key environment variable if needed. Forge never
+   asks you to paste an API key into setup or stores one in the settings file.
+2. **Choose your documents folder.** Enter an existing folder inside the project,
+   or let Forge create `docs/` at the project root. Absolute paths inside the
+   project work too. Existing documents are kept.
+3. **Choose future document search storage (RAG).** Reserve a local folder
+   (default: `.forge/rag/`) or choose “Set up later.” Forge saves your choice
+   and creates the local folder if selected. Document search and indexing are
+   not implemented yet.
+
+Setup creates `request.md`, `.forge/config.toml`, and editable guidance in
+`.forge/standards/`. It ends with a list of created or preserved files, your
+selected settings, and instructions for your first chat. Existing files are
+preserved; running `forge init` again keeps your configuration and restores
+missing request or guidance templates. To change saved settings, edit
+`.forge/config.toml`. Cancelling during the prompts leaves no setup files behind.
+
+For scripts, run `forge init --no-interactive`. Prompts are also skipped when
+input is not a terminal. This creates templates and `docs/`; set the model in
+`.forge/config.toml` before chatting.
+
+To start, run `forge chat` and type `/request`. Forge guides you through the
+title, description, details, and results you want. Use `/ask` followed by a
+question whenever you need model advice. Type `/save-request` to save the draft,
+then `/prepare`, `/answer` if questions are needed, and `/plan`. Read the plan
+and type `/approve` when you are ready for coding. Press Enter to send and
+Ctrl-Q to leave chat. You can also edit `request.md` directly.
+
+Customize the project guidance and replace the request template, for example:
 
 ```markdown
 # Request: Export billing invoices
@@ -68,13 +98,18 @@ Record any unresolved business rules as questions before coding.
 
 For multiple requests, use `forge request "Export billing invoices" --output
 requests/billing.md`. Add domain documents and application standards to the
-`harness.docs` list in `.forge/config.toml`. The baseline loads those explicit
-paths and supplies a bounded file inventory; it does not index the entire repo.
-Missing documentation is reported in the context snapshot.
+`harness.docs` list in `.forge/config.toml`. Entries can be individual files or
+folders. Folders load `.md`, `.txt`, and `.rst` files, including subfolders, in a
+stable order. Known credential paths, symlinks, build folders, and dependencies
+are excluded from folder discovery. Collection is limited to 500 documentation
+files and the configured file/context size limits. Missing documentation is
+reported in the context snapshot. Documents are sent to the selected model
+service as context; this does not build a search index.
 
 ## Choose a provider
 
-Edit the `[provider]` section in `.forge/config.toml`. `model` must be a model
+Choose a provider during `forge init`, or edit the `[provider]` section in
+`.forge/config.toml` afterward. `model` must be a model
 identifier supported by your chosen service; no model is automatically selected.
 
 | Provider kind | API | Default base URL | Default credential environment variable |
@@ -129,7 +164,7 @@ multiline composer. No browser or local web server is needed.
 | Ctrl+N | Start a new chat |
 | Ctrl+L | Focus history; show numbered history on narrow terminals |
 | Ctrl+R | Retry a saved pending message |
-| Ctrl+Q / Ctrl+C / Ctrl+D | Exit after any active reply has been saved |
+| Ctrl+Q / Ctrl+C / Ctrl+D | Exit after any active reply or workflow action has been saved |
 
 On narrow terminals, use Ctrl+L, then type `/open NUMBER` in the composer to
 reopen a saved chat. Multiline paste is supported. Start directly in a saved
@@ -141,10 +176,53 @@ forge chat --resume agentic_audit/forge-chat/RUN_ID
 forge --project /path/to/project chat
 ```
 
-Chat receives the configured project documentation and the current `request.md`
-if present. It helps discuss and refine requests; use `prepare`, `plan`, and `run`
-for approved implementation. It shares the existing provider adapters, so cloud
-providers require the same API-key environment variables.
+You can complete the request workflow in this window:
+
+| Chat command | What it does |
+| --- | --- |
+| `/request [TITLE]` | Draft `request.md`, one question at a time |
+| `/request show` | Read the current request |
+| `/save-request` | Save the finished draft; explicitly replaces an existing `request.md` |
+| `/prepare [FILE]` | Find questions in a request (default: `request.md`) |
+| `/answer` | Record answers one at a time |
+| `/answer Q1 TEXT` | Record a specific answer |
+| `/plan` | Create and display the coding plan |
+| `/run` | Display the plan for review, including interrupted runs |
+| `/approve` | Approve the displayed plan and start or resume coding |
+| `/status` | Show progress, unanswered questions, and the next step |
+| `/changes [FILE]` | Review saved file diffs |
+| `/runs`, then `/use NUMBER` | Continue an existing coding run, including one started with the CLI |
+| `/discover` | Retry failed preparation for the selected run |
+| `/next` | Take the next available step; coding still requires `/approve` |
+| `/ask TEXT` | Ask your model for advice at any step |
+| `/cancel` | Leave request drafting, question answering, or plan review |
+| `/help` | Show all available actions |
+
+To continue an existing run, use `/runs`, then `/use` with its displayed
+number. You can then enter `/plan`, ask questions about the plan, and enter
+`/approve` to start coding. Run paths also work with `/use`; `/plan`, `/run`,
+`/discover`, and `/status` accept an optional run number or path. Quote paths
+that contain spaces.
+
+Ordinary messages go to the model. While drafting a request or recording an
+answer, ordinary messages fill in that prompt instead; use `/ask TEXT` to ask
+for help without saving the advice as an answer. The current mode and next step
+are shown above the composer. Drafts and the selected run persist when you reopen
+the saved chat. Request drafts leave files unchanged until `/save-request`.
+
+Only a user-entered `/approve` starts coding. The approval applies to the exact
+plan displayed by `/plan` or `/run`; changing that plan requires another review.
+Model replies do not execute commands or approve edits. New execution questions
+pause coding and require answers, a revised plan, and a fresh approval. Failed
+preparation can be retried with `/discover`; interrupted coding can be reviewed
+with `/run` and resumed with `/approve`.
+
+Chat sends the current project documentation, `request.md` if present, and the
+selected run’s questions, plan, and summary to the model when you ask for help.
+It shares the existing provider adapters, so cloud providers require the same
+API-key environment variables. Coding runs retain their own audit records and
+file diffs. Suggested tests are displayed for you to run; Forge has no shell
+command runner.
 
 Conversations are stored under `agentic_audit/forge-chat/<run-id>/`, including
 `transcript.md`, `state.json`, context, events, and provider-call inputs/outputs.
@@ -155,7 +233,9 @@ new chat to send with the currently configured model.
 
 Replies arrive in full rather than streaming. Conversation size and successful
 turns use `max_prompt_bytes` and `max_turns`; start a new chat when those limits
-are reached. Exiting while a reply is active waits for it to finish and save.
+are reached. Exiting while a reply or coding action is active waits for it to
+finish or pause and save. Actions run in the background while the terminal stays
+responsive; another message or action can be sent after the current action ends.
 Forced process termination can leave a stale audit lock; use the same recovery
 procedure as agent runs below. `forge chat` requires interactive terminal input
 and output. The former `--no-browser` and `--port` options have been removed.
