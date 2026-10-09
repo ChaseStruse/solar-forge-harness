@@ -107,3 +107,22 @@ class AgentTests(unittest.TestCase):
             run(ws, cfg, audit, ScriptedProvider({'tool': 'finish', 'summary': 'Recovered.', 'verification': 'Review new.py.'}))
             self.assertEqual(ws.read('new.py'), 'new')
             self.assertIn('"recovered": true', (audit.path / 'events.jsonl').read_text())
+
+    def test_files_inside_context_folders_cannot_be_changed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Workspace(Path(tmp))
+            ws.write('request.md', REQUEST)
+            ws.write('docs/rules.md', 'Original rules')
+            cfg = Config(model='test', docs=['docs'])
+            provider = ScriptedProvider({'questions': []}, {'plan': '# Plan\nFollow the rules.'},
+                {'tool': 'read_file', 'path': 'docs/rules.md'},
+                {'tool': 'write_file', 'path': 'docs/rules.md', 'content': 'Changed rules'},
+                {'tool': 'write_file', 'path': 'docs/new.md', 'content': 'New rules'},
+                {'tool': 'finish', 'summary': 'No policy changes.', 'verification': 'Inspect docs.'})
+            audit = prepare(ws, cfg, 'request.md', provider)
+            plan(ws, cfg, audit, provider)
+            approve(audit)
+            run(ws, cfg, audit, provider)
+            self.assertEqual(ws.read('docs/rules.md'), 'Original rules')
+            self.assertFalse((ws.root / 'docs/new.md').exists())
+            self.assertEqual(audit.load()['status'], 'review_required')

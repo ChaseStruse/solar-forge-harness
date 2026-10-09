@@ -36,6 +36,11 @@ max_context_bytes = 200000
 max_prompt_bytes = 500000
 # Add relevant domain documentation here; all paths are project-relative.
 docs = ["README.md", "AGENTS.md", ".forge/standards/coding.md", ".forge/standards/architecture.md", ".forge/standards/deployment.md", ".forge/standards/git.md", ".forge/standards/testing.md"]
+
+# Reserved for future document search; no index is built yet.
+[rag]
+storage = "deferred" # deferred | local
+path = ""
 '''
 
 
@@ -74,6 +79,12 @@ class Request:
 
 
 @dataclass(frozen=True)
+class RagConfig:
+    storage: str = "deferred"
+    path: str = ""
+
+
+@dataclass(frozen=True)
 class Config:
     kind: str = "ollama"
     model: str = "CHANGE_ME"
@@ -85,23 +96,32 @@ class Config:
     max_context_bytes: int = 200000
     max_prompt_bytes: int = 500000
     docs: list[str] = field(default_factory=lambda: ["README.md", "AGENTS.md"])
+    rag: RagConfig = field(default_factory=RagConfig)
 
     @classmethod
     def load(cls, path: Path) -> "Config":
         try:
             data = tomllib.loads(path.read_text())
             provider, harness = data.get("provider", {}), data.get("harness", {})
-            config = cls(**provider, **harness)
+            config = cls(**provider, **harness, rag=RagConfig(**data.get("rag", {})))
         except (OSError, TypeError, AttributeError, tomllib.TOMLDecodeError) as exc:
             raise ForgeError(f"Invalid .forge/config.toml: {exc}") from exc
-        if config.kind not in {"openai", "anthropic", "ollama", "compatible"}:
-            raise ForgeError("Provider must be openai, anthropic, ollama, or compatible.")
         for name in ("timeout", "max_turns", "max_file_bytes", "max_context_bytes", "max_prompt_bytes"):
             if type(getattr(config, name)) is not int or getattr(config, name) <= 0:
                 raise ForgeError(f"{name} must be a positive integer.")
         for name in ("kind", "model", "base_url", "api_key_env"):
             if not isinstance(getattr(config, name), str):
                 raise ForgeError(f"{name} must be a string.")
+        if config.kind not in {"openai", "anthropic", "ollama", "compatible"}:
+            raise ForgeError("Provider must be openai, anthropic, ollama, or compatible.")
         if not isinstance(config.docs, list) or not all(isinstance(p, str) for p in config.docs):
             raise ForgeError("harness.docs must be a list of project-relative paths.")
+        if not isinstance(config.rag.storage, str) or config.rag.storage not in {"deferred", "local"}:
+            raise ForgeError("rag.storage must be deferred or local.")
+        if not isinstance(config.rag.path, str):
+            raise ForgeError("rag.path must be a string.")
+        if config.rag.storage == "local" and (not config.rag.path or Path(config.rag.path).is_absolute()
+                                             or ".." in Path(config.rag.path).parts
+                                             or Path(config.rag.path) == Path(".")):
+            raise ForgeError("rag.path must be a folder inside the project for local storage.")
         return config

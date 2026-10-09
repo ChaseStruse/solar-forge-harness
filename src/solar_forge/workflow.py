@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 import uuid
+from typing import Callable
 
 from .audit import Audit
 from .context import collect
@@ -96,7 +97,8 @@ def discover(audit: Audit, provider: Provider, max_prompt_bytes: int = 500000) -
     audit.event("questions_generated", count=len(state["questions"]))
 
 
-def prepare(workspace: Workspace, config: Config, request_path: str, provider: Provider) -> Audit:
+def prepare(workspace: Workspace, config: Config, request_path: str, provider: Provider,
+            *, on_created: Callable[[Audit], None] | None = None) -> Audit:
     request = Request.parse(workspace.read(request_path))
     context = collect(workspace, config)
     audit = Audit.create(workspace, request)
@@ -106,6 +108,8 @@ def prepare(workspace: Workspace, config: Config, request_path: str, provider: P
     state = audit.load()
     state.update({"request_path": request_path, "provider": config.kind, "model": config.model})
     audit.save(state)
+    if on_created:
+        on_created(audit)
     with audit.lock():
         discover(audit, provider, config.max_prompt_bytes)
     return audit
