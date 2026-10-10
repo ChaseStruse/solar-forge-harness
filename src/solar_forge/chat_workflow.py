@@ -361,7 +361,7 @@ class ChatWorkflow:
         assert_current(self.workspace, self.config, audit)
         text = audit.read('plan.md')
         self.state['reviewed_plan'] = {'run': self.state['workflow_run'], 'sha256': file_hash(text)}
-        return ('Plan for ' + state['title'] + '\n\n' + text + '\nReview this plan. /approve permits project file edits and starts coding.'
+        return ('PROPOSED PLAN — no new edits are authorized yet\nPlan for ' + state['title'] + '\n\n' + text + '\nReview affected files and verification steps above. /approve permits project file edits and starts coding.\nUse /changes to inspect saved changes from earlier execution.'
                 + ('\nUse /ask to discuss it, /plan to generate a revised plan, or /cancel to leave it unapproved.'
                    if state['status'] == 'planned' else
                    '\nThis resumes saved coding progress. Use /ask to discuss it, or /cancel to leave it paused.'))
@@ -382,7 +382,10 @@ class ChatWorkflow:
             self.state.pop('reviewed_plan', None)
             self.chat.save(self.state)
             run(self.workspace, self.config, audit, self.provider)
-        return self.status(audit)
+        result = self.status(audit)
+        if audit.load()['status'] == 'review_required':
+            result += '\n\nACTUAL SAVED CHANGES\n' + self.changes('')
+        return result
 
     def dispatch(self, message: str) -> str:
         if not message.startswith('/'):

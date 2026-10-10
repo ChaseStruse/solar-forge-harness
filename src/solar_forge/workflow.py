@@ -161,7 +161,7 @@ def plan(workspace: Workspace, config: Config, audit: Audit, provider: Provider)
     content["instruction"] = (
         'Return {"plan":"Markdown implementation plan"}. Include concrete steps, '
         'decisions grounded in recorded answers, files affected, acceptance-criterion '
-        'verification, and proposed user-run checks. No shell runner exists. '
+        'verification, and proposed user-run checks. Use headings: Affected files, Implementation steps, Verification, Risks. No shell runner exists. '
         'Honor changes already made if this is a revised plan.')
     data = parse_json(call(audit, provider, SYSTEM, [{"role": "user", "content": json.dumps(content)}], config.max_prompt_bytes))
     text = data.get("plan")
