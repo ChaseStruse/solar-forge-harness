@@ -146,7 +146,7 @@ class TerminalChat:
         try:
             self.current = self.service.get(session)
             self.composer.text = ''
-            self.notice = ('Reply pending. Ctrl+R retries this saved message.' if self.current['pending_message']
+            self.notice = ('Reply pending. Ctrl+R retries; /discard-pending lets you edit it.' if self.current['pending_message']
                            else 'Saved conversation reopened.')
             self.refresh_history()
             self.render()
@@ -169,7 +169,7 @@ class TerminalChat:
             text = ('What are we building?\n\n'
                     'Ask your model for help, or use these actions:\n\n'
                     '  /request   Write a request, one question at a time\n'
-                    '  /prepare   Find questions in request.md\n'
+                    '  /prepare   Find questions in the selected request\n'
                     '  /answer    Record answers (use /ask for model advice)\n'
                     '  /plan      Create and review a coding plan\n'
                     '  /approve   Approve this plan and start coding\n'
@@ -208,8 +208,8 @@ class TerminalChat:
             self.notice = 'No pending message to retry.'
             self.app.invalidate()
             return
-        if not retry and self.current and self.current['pending_message']:
-            self.notice = 'Retry the saved message with Ctrl+R, or start a new chat with Ctrl+N.'
+        if not retry and self.current and self.current['pending_message'] and message != '/discard-pending':
+            self.notice = 'Retry with Ctrl+R, or use /discard-pending to edit the saved message.'
             self.app.invalidate()
             return
         # /ask explicitly consults the model while a request/answer prompt is active.
@@ -238,13 +238,19 @@ class TerminalChat:
                 self.current = await asyncio.to_thread(self.service.command, self.current['id'], message)
                 self.notice = ('Action could not finish. See the details above.' if self.current.get('command_error')
                                else 'Progress saved. Follow the next step above, or ask your model for help.')
+                if 'discarded_message' in self.current:
+                    # Preserve model-advice semantics even while a wizard is active.
+                    draft = '/ask ' + self.current['discarded_message']
+                    self.composer.buffer.set_document(Document(draft, len(draft)), bypass_readonly=True)
+                    self.notice = 'Pending message discarded and kept in the audit. Edit the draft or enter a workflow command.'
+
             else:
                 self.current = await asyncio.to_thread(self.service.send, self.current['id'],
                                                       None if retry else question if asking else message, retry=retry)
                 self.notice = 'Reply saved. Enter sends your next message.'
         except (ForgeError, OSError) as exc:
             self.notice = display(str(exc)) + ('  Use /status to check progress.' if command else
-                                               '  Ctrl+R retries; Ctrl+N starts a new chat.')
+                                               '  Ctrl+R retries; /discard-pending lets you edit or continue.')
             if self.current:
                 self.current = self.service.get(self.current['id'])
             if not retry and (not self.current or not self.current['pending_message']):

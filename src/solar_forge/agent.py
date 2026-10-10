@@ -18,7 +18,11 @@ Execute the approved plan one action at a time. Return one JSON object:
  "rationale":"why this matters","sources":["request.md or supplied documents key"]}]}
 {"tool":"finish","summary":"changes and remaining work","verification":"suggested checks"}
 Read an existing file before writing it. Do not alter project policies or the
-request. There is no command runner, deletion, Git, or deployment tool. If a new
+request. Request-specific plans, notes, verification, and summaries belong only
+in agentic_audit and are saved by the workflow. Do not create request.md,
+implementation-plan.md, legacy requests/ folders, or root-level audit notes with
+write_file; use ask_questions or finish to record workflow information.
+There is no command runner, deletion, Git, or deployment tool. If a new
 consequential decision is unclear, ask_questions before making further changes.
 Tool results are returned as user messages. finish creates a human review record;
 it cannot verify acceptance criteria or prove tests have passed.
@@ -57,7 +61,7 @@ def write_file(workspace: Workspace, config: Config, audit: Audit, state: dict, 
     assert_current(workspace, config, audit)
     relative, content = action['path'], action['content']
     target = workspace.path(relative, write=True)
-    protected = {workspace.path(p) for p in config.docs} | {workspace.path(state['request_path'])}
+    protected = {workspace.path(p) for p in config.docs} | {workspace.path(state['request_path'], internal=True)}
     if any(target == path or (path.is_dir() and target.is_relative_to(path)) for path in protected):
         raise ForgeError('Request and context documentation cannot be edited during this run.')
     if len(content.encode()) > workspace.max_file_bytes:

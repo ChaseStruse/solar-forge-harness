@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from solar_forge.requests import DEFAULT_REQUEST, read_request, write_request
 from solar_forge.cli import main
 from solar_forge.context import collect
 from solar_forge.domain import Config, CONFIG_TEMPLATE, ForgeError
@@ -31,7 +32,7 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(config.rag.storage, 'deferred')
             self.assertIn('docs', config.docs)
             self.assertTrue((root / 'docs').is_dir())
-            self.assertTrue((root / 'request.md').is_file())
+            self.assertTrue((root / DEFAULT_REQUEST).is_file())
             self.assertTrue((root / '.forge/standards/coding.md').is_file())
             self.assertIn('forge chat', out)
             self.assertIn('request.md', out)
@@ -83,7 +84,7 @@ class SetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.assertEqual(self.invoke(root, ['1', 'local-model', '', 'no', '2'])[0], 0)
-            for relative in ('request.md', '.forge/standards/coding.md'):
+            for relative in (DEFAULT_REQUEST, '.forge/standards/coding.md'):
                 (root / relative).write_bytes(b'Custom content\r\n')
             paths = [p for p in root.rglob('*') if p.is_file()]
             before = {p: p.read_bytes() for p in paths}

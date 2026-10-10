@@ -4,13 +4,14 @@ import os
 from pathlib import Path
 
 from .domain import Config, ForgeError
+from .requests import request_path as validate_request_path
 from .workspace import EXCLUDED, Workspace, sensitive
 
 DOCUMENT_SUFFIXES = {'.md', '.txt', '.rst'}
 
 
-def document_paths(workspace: Workspace, name: str):
-    path = workspace.path(name)
+def document_paths(workspace: Workspace, name: str, *, internal=False):
+    path = workspace.path(name, internal=internal)
     if not path.is_dir():
         yield name
         return
@@ -30,22 +31,29 @@ def bundled_guidance() -> dict[str, str]:
             for name in ("coding.md", "architecture.md", "deployment.md", "git.md", "testing.md")}
 
 
-def collect(workspace: Workspace, config: Config) -> dict:
+def collect(workspace: Workspace, config: Config, request_path: str | None = None) -> dict:
+    if request_path:
+        validate_request_path(workspace, request_path)
     documents = bundled_guidance()
     bundled = len(documents)
     used = sum(len(text.encode()) for text in documents.values())
     skipped: list[dict] = []
-    for name in dict.fromkeys(config.docs):
-        path = workspace.path(name)
+    names = list(dict.fromkeys(config.docs))
+    bundle = str(Path(request_path).parent) if request_path else None
+    if bundle:
+        names.append(bundle)
+    for name in names:
+        internal = name == bundle
+        path = workspace.path(name, internal=internal)
         if not path.exists():
             skipped.append({"path": name, "reason": "missing"})
             continue
-        for document in document_paths(workspace, name):
-            if document in documents:
+        for document in document_paths(workspace, name, internal=internal):
+            if document == request_path or document in documents:
                 continue
             if len(documents) - bundled >= 500:
                 raise ForgeError("More than 500 documentation files; narrow harness.docs.")
-            text = workspace.read(document)
+            text = workspace.read(document, internal=internal)
             size = len(text.encode())
             if used + size > config.max_context_bytes:
                 raise ForgeError(f"Context exceeds max_context_bytes at {document}; narrow harness.docs.")

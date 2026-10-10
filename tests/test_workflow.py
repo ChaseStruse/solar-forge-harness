@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from solar_forge.requests import DEFAULT_REQUEST, read_request, write_request
 from solar_forge.domain import Config, ForgeError
 from solar_forge.workflow import call, plan, prepare, record_answer
 from solar_forge.workspace import Workspace
@@ -28,10 +29,10 @@ class WorkflowTests(unittest.TestCase):
     def test_questions_block_plan_and_answers_persist(self):
         with tempfile.TemporaryDirectory() as tmp:
             ws = Workspace(Path(tmp))
-            ws.write('request.md', REQUEST)
+            write_request(ws, DEFAULT_REQUEST, REQUEST)
             config = Config(model='test')
             provider = ScriptedProvider(QUESTION, {'plan': '# Plan\nUse recorded timezone.'})
-            audit = prepare(ws, config, 'request.md', provider)
+            audit = prepare(ws, config, DEFAULT_REQUEST, provider)
             self.assertEqual(audit.load()['status'], 'awaiting_answers')
             with self.assertRaises(ForgeError):
                 plan(ws, config, audit, provider)
@@ -46,9 +47,9 @@ class WorkflowTests(unittest.TestCase):
     def test_provider_failure_leaves_discoverable_audit(self):
         with tempfile.TemporaryDirectory() as tmp:
             ws = Workspace(Path(tmp))
-            ws.write('request.md', REQUEST)
+            write_request(ws, DEFAULT_REQUEST, REQUEST)
             with self.assertRaises(ForgeError):
-                prepare(ws, Config(), 'request.md', ScriptedProvider(ForgeError('offline')))
+                prepare(ws, Config(), DEFAULT_REQUEST, ScriptedProvider(ForgeError('offline')))
             state = next(Path(tmp).glob('agentic_audit/*/*/state.json'))
             self.assertEqual(json.loads(state.read_text())['status'], 'discovering')
             self.assertIn('provider_call_failed', (state.parent / 'events.jsonl').read_text())
@@ -56,16 +57,16 @@ class WorkflowTests(unittest.TestCase):
     def test_unknown_question_sources_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             ws = Workspace(Path(tmp))
-            ws.write('request.md', REQUEST)
+            write_request(ws, DEFAULT_REQUEST, REQUEST)
             bad = {'questions': [{'question': 'Q', 'rationale': 'R', 'sources': ['invented.md']}]}
             with self.assertRaises(ForgeError):
-                prepare(ws, Config(), 'request.md', ScriptedProvider(bad))
+                prepare(ws, Config(), DEFAULT_REQUEST, ScriptedProvider(bad))
 
     def test_prompt_budget_stops_before_provider_call(self):
         with tempfile.TemporaryDirectory() as tmp:
             ws = Workspace(Path(tmp))
-            ws.write('request.md', REQUEST)
-            audit = prepare(ws, Config(), 'request.md', ScriptedProvider({'questions': []}))
+            write_request(ws, DEFAULT_REQUEST, REQUEST)
+            audit = prepare(ws, Config(), DEFAULT_REQUEST, ScriptedProvider({'questions': []}))
             with self.assertRaises(ForgeError):
                 call(audit, ScriptedProvider(), 'system', [{'role': 'user', 'content': 'large'}], 1)
             self.assertIn('prompt_budget', (audit.path / 'events.jsonl').read_text())

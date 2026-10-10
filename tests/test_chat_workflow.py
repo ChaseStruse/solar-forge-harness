@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from solar_forge.requests import DEFAULT_REQUEST, read_request, write_request
 from solar_forge.audit import Audit
 from solar_forge.chat import ChatService
 from solar_forge.domain import Config, ForgeError, Request
@@ -23,7 +24,7 @@ class ChatWorkflowTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
         self.workspace = Workspace(self.root)
-        self.workspace.write('request.md', REQUEST)
+        write_request(self.workspace, DEFAULT_REQUEST, REQUEST)
         self.config = Config(model='test')
 
     def service(self, *responses):
@@ -70,7 +71,7 @@ class ChatWorkflowTests(unittest.TestCase):
         self.assertIn('review_required', provider.calls[-1][0])
 
     def test_existing_cli_run_selected_and_persisted_on_reopen(self):
-        audit = prepare(self.workspace, self.config, 'request.md', TextProvider(response({'questions': []})))
+        audit = prepare(self.workspace, self.config, DEFAULT_REQUEST, TextProvider(response({'questions': []})))
         service, session, _ = self.service(response({'plan': '# Plan\nDo the work.'}))
         listing = self.act(service, session, '/runs')
         self.assertIn('1. Add billing export', listing['messages'][-1]['content'])
@@ -100,7 +101,7 @@ class ChatWorkflowTests(unittest.TestCase):
     def test_tampered_plan_or_changed_request_cannot_be_approved(self):
         for changed in ('plan', 'request', 'docs'):
             with self.subTest(changed=changed):
-                self.workspace.write('request.md', REQUEST)
+                write_request(self.workspace, DEFAULT_REQUEST, REQUEST)
                 if (self.root / 'README.md').exists():
                     (self.root / 'README.md').unlink()
                 service, session, provider = self.service(response({'questions': []}), response({'plan': '# Plan\nBuild it.'}))
@@ -110,7 +111,7 @@ class ChatWorkflowTests(unittest.TestCase):
                 if changed == 'plan':
                     audit.write('plan.md', '# Different plan')
                 elif changed == 'request':
-                    self.workspace.write('request.md', REQUEST.replace('Export invoices.', 'Export everything.'))
+                    write_request(self.workspace, DEFAULT_REQUEST, REQUEST.replace('Export invoices.', 'Export everything.'))
                 else:
                     self.workspace.write('README.md', 'New project guidance')
                 denied = service.command(session, '/approve')
@@ -170,14 +171,14 @@ class ChatWorkflowTests(unittest.TestCase):
         self.act(service, session, 'Create a calculator for basic arithmetic.')
         service.send(session, 'What technical details should I provide?')
         self.assertIn('Create a calculator', provider.calls[-1][0])
-        self.assertEqual(self.workspace.read('request.md'), REQUEST)
+        self.assertEqual(read_request(self.workspace, DEFAULT_REQUEST), REQUEST)
         self.act(service, session, 'Please help me work out the details.')
         reviewed = self.act(service, session, 'Addition works\nDivision by zero is explained')
-        self.assertIn('replaces the existing file', reviewed['messages'][-1]['content'])
-        self.assertEqual(self.workspace.read('request.md'), REQUEST)
+        self.assertIn('agentic_audit/requests/calculator/request.md', reviewed['messages'][-1]['content'])
+        self.assertEqual(read_request(self.workspace, DEFAULT_REQUEST), REQUEST)
         self.assertTrue(service.command(session, '/prepare')['command_error'])
         self.act(service, session, '/save-request')
-        request = Request.parse(self.workspace.read('request.md'))
+        request = Request.parse(read_request(self.workspace, 'agentic_audit/requests/calculator/request.md'))
         self.assertEqual(request.title, 'Calculator')
         self.assertIn('- [ ] Addition works', request.acceptance_criteria)
         self.assertIsNone(service.get(session)['input_mode'])
@@ -188,13 +189,13 @@ class ChatWorkflowTests(unittest.TestCase):
         service, session, _ = self.service()
         self.act(service, session, '/request New request')
         self.act(service, session, '/cancel')
-        self.assertEqual(self.workspace.read('request.md'), REQUEST)
+        self.assertEqual(read_request(self.workspace, DEFAULT_REQUEST), REQUEST)
         for message in ('/request Another request', 'Description', 'Details', 'It works'):
             self.act(service, session, message)
-        self.workspace.write('request.md', REQUEST + '\nChanged externally.\n')
+        write_request(self.workspace, 'agentic_audit/requests/another-request/request.md', REQUEST + '\nChanged externally.\n')
         denied = service.command(session, '/save-request')
         self.assertIn('changed while', denied['command_error'])
-        self.assertIn('Changed externally', self.workspace.read('request.md'))
+        self.assertIn('Changed externally', read_request(self.workspace, 'agentic_audit/requests/another-request/request.md'))
         self.assertEqual(service.get(session)['input_mode'], 'request')
 
     def test_locked_run_wrong_model_and_pending_reply_block_actions(self):

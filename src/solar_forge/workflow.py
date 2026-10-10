@@ -8,7 +8,8 @@ from typing import Callable
 from .audit import Audit
 from .context import collect
 from .domain import Config, ForgeError, Request
-from .providers import Provider
+from .requests import read_request
+from .providers import Provider, configured_identity, assert_identity
 from .workspace import Workspace
 
 SYSTEM = """You are Solar Forge, a request-driven coding agent. Follow the request,
@@ -33,13 +34,20 @@ def parse_json(text: str) -> dict:
 
 
 def call(audit: Audit, provider: Provider, system: str, messages: list[dict], max_prompt_bytes: int = 500000) -> str:
+    state = audit.load()
+    actual_identity = getattr(provider, 'audit_identity', None)
+    identity = (dict(actual_identity) if actual_identity is not None else
+                {key: state.get(key) for key in ('provider', 'model', 'endpoint')})
+    assert_identity(state, identity)
     call_id = uuid.uuid4().hex
     serialized = json.dumps({"system": system, "messages": messages}, ensure_ascii=False)
     if len(serialized.encode()) > max_prompt_bytes:
         audit.event("provider_call_rejected", call_id=call_id, reason="prompt_budget")
         raise ForgeError("Prompt exceeds max_prompt_bytes; narrow the request or adjust the configured budget.")
-    audit.write(f"calls/{call_id}-input.json", serialized)
-    audit.event("provider_call_started", call_id=call_id)
+    record = {'identity': identity, 'identity_source': 'adapter' if actual_identity is not None else 'run_configuration',
+              'system': system, 'messages': messages}
+    audit.write(f"calls/{call_id}-input.json", json.dumps(record, ensure_ascii=False))
+    audit.event("provider_call_started", call_id=call_id, identity=identity)
     try:
         result = provider.complete(system, messages)
         audit.write(f"calls/{call_id}-output.txt", result)
@@ -99,14 +107,14 @@ def discover(audit: Audit, provider: Provider, max_prompt_bytes: int = 500000) -
 
 def prepare(workspace: Workspace, config: Config, request_path: str, provider: Provider,
             *, on_created: Callable[[Audit], None] | None = None) -> Audit:
-    request = Request.parse(workspace.read(request_path))
-    context = collect(workspace, config)
+    request = Request.parse(read_request(workspace, request_path))
+    context = collect(workspace, config, request_path)
     audit = Audit.create(workspace, request)
     audit.write("context.json", json.dumps(context, indent=2, ensure_ascii=False))
     audit.write("context.md", '# Context snapshot\n\n' + '\n\n'.join(
         f'## {name}\n\n{text}' for name, text in context['documents'].items()))
     state = audit.load()
-    state.update({"request_path": request_path, "provider": config.kind, "model": config.model})
+    state.update({"request_path": request_path, **configured_identity(config)})
     audit.save(state)
     if on_created:
         on_created(audit)
@@ -134,9 +142,10 @@ def record_answer(audit: Audit, question_id: str, answer: str) -> None:
 
 def assert_current(workspace: Workspace, config: Config, audit: Audit) -> None:
     state = audit.load()
-    if workspace.read(state["request_path"]) != audit.read("request.md"):
+    assert_identity(state, configured_identity(config))
+    if read_request(workspace, state["request_path"]) != audit.read("request.md"):
         raise ForgeError("Request changed since discovery. Prepare a new run.")
-    current = collect(workspace, config)
+    current = collect(workspace, config, state["request_path"])
     previous = json.loads((audit.path / "context.json").read_text())
     if current["documents"] != previous["documents"] or current["skipped"] != previous["skipped"]:
         raise ForgeError("Project guidance changed since discovery. Prepare a new run.")

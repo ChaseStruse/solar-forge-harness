@@ -1,0 +1,8 @@
+F1 chat listing: Run must be agentic_audit/<request-slug>/<run-id>.
+F1 status exit: 1 forge: Run must be agentic_audit/<request-slug>/<run-id>.
+F2 root request written: True status: review_required
+F3 send: Prompt exceeds max_prompt_bytes; narrow the request or adjust the configured budget.
+F3 retry: Prompt exceeds max_prompt_bytes; narrow the request or adjust the configured budget.
+F3 cancel: Retry the pending model message with Ctrl+R, or start a new chat before taking workflow actions.
+F3 status: Retry the pending model message with Ctrl+R, or start a new chat before taking workflow actions.
+F4 execution model: replacement audit model: original

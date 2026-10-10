@@ -10,6 +10,7 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 from prompt_toolkit.data_structures import Size
 
+from solar_forge.requests import DEFAULT_REQUEST, read_request, write_request
 from solar_forge.chat import ChatService
 from solar_forge.audit import Audit
 from solar_forge.domain import Config, ForgeError
@@ -26,11 +27,32 @@ class WideOutput(DummyOutput):
 
 
 class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
+    async def test_discard_pending_returns_editable_advice_during_request_draft(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            service = ChatService(Workspace(Path(tmp)), Config(model='test', max_prompt_bytes=100), TextProvider())
+            ui = TerminalChat(service, input=pipe, output=DummyOutput())
+            ui.composer.text = '/request Calculator'
+            await ui.send()
+            session = ui.current['id']
+            ui.composer.text = '/ask Help with this draft'
+            await ui.send()
+            self.assertEqual(ui.current['pending_message'], 'Help with this draft')
+            ui.composer.text = '/discard-pending'
+            await ui.send()
+            self.assertEqual(ui.current['id'], session)
+            self.assertIsNone(ui.current['pending_message'])
+            self.assertEqual(ui.current['input_mode'], 'request')
+            self.assertEqual(ui.composer.text, '/ask Help with this draft')
+            ui.composer.text = '/cancel'
+            await ui.send()
+            self.assertIsNone(ui.current['input_mode'])
+            self.assertFalse(ui.busy)
+
     async def test_workflow_actions_and_model_advice_inside_window(self):
         with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
             root = Path(tmp)
             workspace = Workspace(root)
-            workspace.write('request.md', REQUEST)
+            write_request(workspace, DEFAULT_REQUEST, REQUEST)
             provider = TextProvider(json.dumps(QUESTION), 'Choose UTC.',
                                     json.dumps({'plan': '# Plan\nCreate export.py.'}),
                                     json.dumps({'tool': 'write_file', 'path': 'export.py', 'content': 'TIMEZONE = "UTC"\n'}),
@@ -78,13 +100,13 @@ class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
             for message in ('Build a calculator.', 'Please help me work out the details.', 'Addition works', '/save-request'):
                 ui.composer.text = message
                 await ui.send()
-            self.assertIn('# Request: Calculator', (root / 'request.md').read_text())
+            self.assertIn('# Request: Calculator', (root / 'agentic_audit/requests/calculator/request.md').read_text())
             self.assertIsNone(ui.current['input_mode'])
 
     async def test_keyboard_workflow_commands_require_explicit_approval(self):
         with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
             workspace = Workspace(Path(tmp))
-            workspace.write('request.md', REQUEST)
+            write_request(workspace, DEFAULT_REQUEST, REQUEST)
             provider = TextProvider(json.dumps({'questions': []}), json.dumps({'plan': '# Plan\nInspect the project.'}),
                                     json.dumps({'tool': 'finish', 'summary': 'Ready for review.', 'verification': 'Inspect manually.'}))
             ui = TerminalChat(ChatService(workspace, Config(model='test'), provider), input=pipe, output=WideOutput())

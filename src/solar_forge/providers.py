@@ -60,14 +60,32 @@ def validate_base_url(base: str) -> None:
         raise ForgeError("Remote provider endpoints require HTTPS; HTTP is allowed only on loopback.")
 
 
+DEFAULT_BASES = {'openai': 'https://api.openai.com/v1', 'anthropic': 'https://api.anthropic.com/v1',
+                 'ollama': 'http://localhost:11434', 'compatible': 'http://localhost:8080/v1'}
+ENDPOINTS = {'openai': '/responses', 'anthropic': '/messages',
+             'ollama': '/api/chat', 'compatible': '/chat/completions'}
+
+
+def configured_identity(config: Config) -> dict:
+    base = (config.base_url or DEFAULT_BASES[config.kind]).rstrip('/')
+    validate_base_url(base)
+    return {'provider': config.kind, 'model': config.model, 'endpoint': base + ENDPOINTS[config.kind]}
+
+
+def assert_identity(state: dict, identity: dict) -> None:
+    # Older audits have no endpoint; their provider/model are still enforced.
+    if any(state.get(key) is not None and state[key] != identity.get(key)
+           for key in ('provider', 'model', 'endpoint')):
+        raise ForgeError('This run uses a different model, provider, or endpoint. '
+                         'Restore its original configuration or prepare a new run.')
+
+
 class HTTPProvider:
     def __init__(self, config: Config):
         self.config = config
         if not config.model.strip() or config.model == "CHANGE_ME":
             raise ForgeError("Set provider.model in .forge/config.toml or pass --model.")
-        defaults = {"openai": "https://api.openai.com/v1", "anthropic": "https://api.anthropic.com/v1",
-                    "ollama": "http://localhost:11434", "compatible": "http://localhost:8080/v1"}
-        self.base = (config.base_url or defaults[config.kind]).rstrip("/")
+        self.base = (config.base_url or DEFAULT_BASES[config.kind]).rstrip("/")
         validate_base_url(self.base)
         url = urlparse(self.base)
         env = config.api_key_env or {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
@@ -77,24 +95,26 @@ class HTTPProvider:
                              (config.kind == "compatible" and not local_host(url.hostname))):
             raise ForgeError(f"Set the {env} environment variable for this provider.")
 
+    @property
+    def audit_identity(self) -> dict:
+        return {'provider': self.config.kind, 'model': self.config.model,
+                'endpoint': self.base + ENDPOINTS[self.config.kind]}
+
     def complete(self, system: str, messages: list[dict[str, str]]) -> str:
         cfg = self.config
         headers = {}
         if cfg.kind == "openai":
-            endpoint = "/responses"
             payload = {"model": cfg.model, "instructions": system, "input": messages, "store": False}
             headers = {"Authorization": f"Bearer {self.key}"}
         elif cfg.kind == "anthropic":
-            endpoint = "/messages"
             payload = {"model": cfg.model, "system": system, "messages": messages, "max_tokens": 8192}
             headers = {"x-api-key": self.key, "anthropic-version": "2023-06-01"}
         else:
-            endpoint = "/api/chat" if cfg.kind == "ollama" else "/chat/completions"
             payload = {"model": cfg.model, "messages": [{"role": "system", "content": system}, *messages],
                        "stream": False}
             if self.key:
                 headers = {"Authorization": f"Bearer {self.key}"}
-        data = post_json(self.base + endpoint, headers, payload, cfg.timeout)
+        data = post_json(self.audit_identity["endpoint"], headers, payload, cfg.timeout)
         try:
             if cfg.kind == "openai":
                 if data.get("status") not in (None, "completed"):

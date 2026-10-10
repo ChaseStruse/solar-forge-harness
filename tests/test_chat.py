@@ -1,10 +1,13 @@
 from contextlib import redirect_stdout, redirect_stderr
 from io import StringIO
+import json
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
+from solar_forge.requests import DEFAULT_REQUEST, read_request, write_request
 from solar_forge.chat import ChatService
 from solar_forge.cli import main
 from solar_forge.domain import Config, CONFIG_TEMPLATE, ForgeError
@@ -29,7 +32,7 @@ class ChatServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ws = Workspace(Path(tmp))
             ws.write('README.md', 'Use UTC for invoice dates.')
-            ws.write('request.md', 'Draft request under discussion.')
+            write_request(ws, DEFAULT_REQUEST, 'Draft request under discussion.')
             provider = TextProvider('Hello!', 'Use UTC.')
             service = ChatService(ws, Config(model='test-model'), provider)
             session = service.new()
@@ -64,6 +67,48 @@ class ChatServiceTests(unittest.TestCase):
             self.assertEqual([m['role'] for m in result['messages']], ['user', 'assistant'])
             self.assertIsNone(result['pending_message'])
             self.assertEqual(provider.calls[0][1], provider.calls[1][1])
+
+    def test_discard_budget_failure_preserves_history_and_selected_run(self):
+        from solar_forge.audit import Audit
+        from test_foundation import REQUEST
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Workspace(Path(tmp))
+            write_request(ws, DEFAULT_REQUEST, REQUEST)
+            provider = TextProvider(json.dumps({'questions': []}), 'Hello', 'Recovered')
+            service = ChatService(ws, Config(model='test', max_prompt_bytes=20000), provider)
+            session = service.new()['id']
+            prepared = service.command(session, '/prepare')
+            self.assertIsNone(prepared['command_error'])
+            service.send(session, 'hello')
+            before = service.get(session)
+            with self.assertRaisesRegex(ForgeError, 'Prompt exceeds'):
+                service.send(session, 'x' * 20000)
+            with self.assertRaisesRegex(ForgeError, 'Prompt exceeds'):
+                service.send(session, retry=True)
+            self.assertEqual(len(provider.calls), 2)
+            result = service.command(session, '/discard-pending')
+            self.assertIsNone(result['pending_message'])
+            self.assertEqual(result['discarded_message'], 'x' * 20000)
+            self.assertEqual(result['messages'], before['messages'])
+            self.assertEqual(result['workflow_run'], before['workflow_run'])
+            self.assertIn('chat_message_discarded', Audit.open(ws, session).read('events.jsonl'))
+            self.assertIsNone(service.command(session, '/status')['command_error'])
+            self.assertIsNone(service.send(session, 'shorter question')['pending_message'])
+            with self.assertRaisesRegex(ForgeError, 'no pending'):
+                service.command(session, '/discard-pending')
+
+    def test_endpoint_change_is_rejected_for_existing_chat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Workspace(Path(tmp))
+            config = Config(model='test')
+            service = ChatService(ws, config, TextProvider())
+            session = service.new()['id']
+            changed = ChatService(ws, replace(config, base_url='http://localhost:11435'), TextProvider())
+            for operation in (lambda: changed.send(session, 'hello'),
+                              lambda: changed.command(session, '/request New request')):
+                with self.assertRaisesRegex(ForgeError, 'endpoint'):
+                    operation()
+            self.assertEqual(service.get(session)['messages'], [])
 
     def test_limits_model_mismatch_and_no_pending_retry(self):
         with tempfile.TemporaryDirectory() as tmp:

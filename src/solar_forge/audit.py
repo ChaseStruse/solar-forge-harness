@@ -5,10 +5,13 @@ import json
 from pathlib import Path
 import re
 import uuid
+import warnings
 
 from .domain import ForgeError, Request
 from .workspace import Workspace, atomic_write
 
+
+RUN_PATH = re.compile(r"agentic_audit/[a-z0-9-]+/[0-9]{8}T[0-9]{6}-[a-f0-9]{10}")
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -32,7 +35,7 @@ class Audit:
 
     @classmethod
     def open(cls, workspace: Workspace, relative: str) -> "Audit":
-        if not re.fullmatch(r"agentic_audit/[a-z0-9-]+/[0-9]{8}T[0-9]{6}-[a-f0-9]{10}", relative.rstrip("/")):
+        if not RUN_PATH.fullmatch(relative.rstrip("/")):
             raise ForgeError("Run must be agentic_audit/<request-slug>/<run-id>.")
         path = workspace.path(relative.rstrip("/"), internal=True)
         if not path.is_dir() or not (path / "state.json").is_file():
@@ -41,6 +44,24 @@ class Audit:
             if child.is_symlink():
                 raise ForgeError("Audit contains an unsafe symlink.")
         return cls(path)
+
+    @classmethod
+    def discover(cls, workspace: Workspace) -> list["Audit"]:
+        """Enumerate run-shaped paths, leaving request attachments alone."""
+        root = workspace.path('agentic_audit', internal=True)
+        runs = []
+        for state_path in sorted(root.glob('*/*/state.json')):
+            relative = state_path.parent.relative_to(workspace.root).as_posix()
+            if not RUN_PATH.fullmatch(relative):
+                continue
+            try:
+                audit = cls.open(workspace, relative)
+                audit.load()
+            except (ForgeError, OSError) as exc:
+                warnings.warn(f'Skipping unreadable run {relative}: {exc}', RuntimeWarning)
+                continue
+            runs.append(audit)
+        return runs
 
     def write(self, name: str, content: str) -> None:
         path = self.path / name

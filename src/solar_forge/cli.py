@@ -9,7 +9,8 @@ from .agent import approve, run
 from .audit import Audit
 from .chat import ChatService
 from .domain import Config, ForgeError, REQUEST_TEMPLATE
-from .providers import HTTPProvider
+from .providers import HTTPProvider, assert_identity, configured_identity
+from .requests import current_request, request_name, request_path
 from .setup import create, initialize
 from .workflow import discover, plan, prepare, record_answer
 from .workspace import Workspace
@@ -24,7 +25,7 @@ def parser() -> argparse.ArgumentParser:
     init.add_argument('--no-interactive', action='store_true', help='Create setup templates without prompts')
     request = commands.add_parser('request', help='Create a request template')
     request.add_argument('title')
-    request.add_argument('--output', default='request.md')
+    request.add_argument('--output', help='Must be agentic_audit/requests/<request-name>/request.md')
     chat = commands.add_parser('chat', help='Open a terminal chat interface with the configured model')
     chat.add_argument('--provider', choices=['openai', 'anthropic', 'ollama', 'compatible'])
     chat.add_argument('--model')
@@ -35,7 +36,7 @@ def parser() -> argparse.ArgumentParser:
                             ('run', 'Approve a plan and run the bounded coding agent')]:
         command = commands.add_parser(name, help=help_text)
         if name == 'prepare':
-            command.add_argument('request', nargs='?', default='request.md')
+            command.add_argument('request', nargs='?', default=None)
             command.add_argument('--no-interactive', action='store_true', help='Leave questions pending for forge answer')
         else:
             command.add_argument('audit', help='Project-relative run directory')
@@ -86,16 +87,17 @@ def main(argv=None) -> int:
         if args.command == 'request':
             if '\n' in args.title or '\r' in args.title or not args.title.strip():
                 raise ForgeError('Request title must be a nonempty single line.')
-            create(workspace, args.output, REQUEST_TEMPLATE.replace('Your request title', args.title.strip()))
+            name = args.output or request_name(args.title)
+            request_path(workspace, name)
+            create(workspace, name, REQUEST_TEMPLATE.replace('Your request title', args.title.strip()), internal=True)
             return 0
         if args.command == 'status':
             if args.audit:
                 show(Audit.open(workspace, args.audit), workspace)
             else:
-                root = workspace.path('agentic_audit', internal=True)
-                runs = sorted(root.glob('*/*/state.json')) if root.exists() else []
-                for state_path in runs:
-                    show(Audit.open(workspace, state_path.parent.relative_to(workspace.root).as_posix()), workspace)
+                runs = Audit.discover(workspace)
+                for audit in runs:
+                    show(audit, workspace)
                 if not runs:
                     print('No audited runs yet. Start with forge prepare.')
             return 0
@@ -125,7 +127,7 @@ def main(argv=None) -> int:
             run_terminal_chat(ChatService(workspace, config, provider), resume=args.resume)
             return 0
         if args.command == 'prepare':
-            audit = prepare(workspace, config, args.request, provider)
+            audit = prepare(workspace, config, current_request(workspace, args.request), provider)
             show(audit, workspace)
             if not args.no_interactive and sys.stdin.isatty() and audit.load()['status'] == 'awaiting_answers':
                 with audit.lock():
@@ -133,6 +135,7 @@ def main(argv=None) -> int:
             return 0
         audit = Audit.open(workspace, args.audit)
         with audit.lock():
+            assert_identity(audit.load(), configured_identity(config))
             if args.command == 'discover':
                 discover(audit, provider, config.max_prompt_bytes)
             elif args.command == 'plan':

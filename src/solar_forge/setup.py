@@ -8,6 +8,7 @@ import tomllib
 
 from .context import bundled_guidance
 from .domain import Config, CONFIG_TEMPLATE, ForgeError, RagConfig, REQUEST_TEMPLATE
+from .requests import DEFAULT_REQUEST
 from .providers import validate_base_url
 from .workspace import EXCLUDED, Workspace
 
@@ -177,7 +178,7 @@ def initialize(workspace: Workspace, *, interactive: bool) -> None:
             existed = target.exists()
             target.mkdir(parents=True, exist_ok=True)
             print(f'{"Kept existing" if existed else "Created"} future search storage folder: {name}/')
-    create(workspace, 'request.md', REQUEST_TEMPLATE)
+    create(workspace, DEFAULT_REQUEST, REQUEST_TEMPLATE, internal=True)
     for name, text in bundled_guidance().items():
         create(workspace, '.forge/standards/' + name.split('/')[-1], text, internal=True)
 
