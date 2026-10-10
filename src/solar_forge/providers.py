@@ -100,6 +100,44 @@ class HTTPProvider:
         return {'provider': self.config.kind, 'model': self.config.model,
                 'endpoint': self.base + ENDPOINTS[self.config.kind]}
 
+    def stream(self, system: str, messages: list[dict[str, str]]):
+        """Native Ollama NDJSON; other adapters retain their complete reply path."""
+        if self.config.kind != 'ollama':
+            yield self.complete(system, messages)
+            return
+        payload = {'model': self.config.model, 'stream': True,
+                   'messages': [{'role': 'system', 'content': system}, *messages]}
+        headers = {'Content-Type': 'application/json'}
+        if self.key:
+            headers['Authorization'] = f'Bearer {self.key}'
+        request = Request(self.audit_identity['endpoint'], json.dumps(payload).encode(), headers, method='POST')
+        used = 0
+        try:
+            with build_opener(NoRedirect()).open(request, timeout=self.config.timeout) as response:
+                while True:
+                    raw = response.readline(2_000_001)
+                    if not raw:
+                        raise ForgeError('Provider stream ended before completion.')
+                    used += len(raw)
+                    if used > 2_000_000:
+                        raise ForgeError('Provider response exceeds 2 MB.')
+                    data = json.loads(raw)
+                    if not isinstance(data, dict) or data.get('error'):
+                        raise ForgeError('Provider stream returned an error.')
+                    if data.get('done_reason') == 'length':
+                        raise ForgeError('Provider response was truncated.')
+                    text = data.get('message', {}).get('content', '')
+                    if not isinstance(text, str):
+                        raise ForgeError('Provider stream returned invalid text.')
+                    if text:
+                        yield text
+                    if data.get('done') is True:
+                        return
+        except HTTPError as exc:
+            raise ForgeError(f'Provider HTTP {exc.code}; check credentials, model, and endpoint.') from exc
+        except (URLError, OSError, ValueError, AttributeError, TypeError) as exc:
+            raise ForgeError('Provider stream failed; check endpoint and timeout.') from exc
+
     def complete(self, system: str, messages: list[dict[str, str]]) -> str:
         cfg = self.config
         headers = {}

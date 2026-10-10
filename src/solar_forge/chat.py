@@ -128,7 +128,7 @@ class ChatService:
             target.event('chat_continuation_created', parent_chat=session)
         return self.get(new['id']) | {'command_error': None}
 
-    def send(self, session: str, message: str | None = None, *, retry: bool = False) -> dict:
+    def send(self, session: str, message: str | None = None, *, retry: bool = False, on_chunk=None, cancelled=None) -> dict:
         audit = self._open(session)
         with audit.lock():
             state = audit.load()
@@ -156,7 +156,8 @@ class ChatService:
             try:
                 context, system = self.prompt_context(audit, state)
                 audit.write('context.json', json.dumps(context, indent=2, ensure_ascii=False))
-                response = call(audit, self.provider, system, messages, self.config.max_prompt_bytes)
+                response = call(audit, self.provider, system, messages, self.config.max_prompt_bytes,
+                                on_chunk=on_chunk, cancelled=cancelled)
             except Exception:
                 audit.event('chat_reply_failed')
                 raise
@@ -185,7 +186,7 @@ class ChatService:
             self._transcript(audit, state)
         return self.get(session) | {'command_error': None, 'discarded_message': message}
 
-    def command(self, session: str, message: str) -> dict:
+    def command(self, session: str, message: str, *, cancelled=None) -> dict:
         """User-entered actions only; provider replies never pass through this path."""
         if message.strip() == '/continue':
             return self.continue_chat(session)
@@ -202,7 +203,7 @@ class ChatService:
                 raise ForgeError('Enter a command or answer within the configured file size limit.')
             state['messages'].append({'role': 'user', 'content': message.strip()})
             audit.event('chat_command_started', command=message.split(maxsplit=1)[0])
-            workflow = ChatWorkflow(self.workspace, self.config, self.provider, audit, state)
+            workflow = ChatWorkflow(self.workspace, self.config, self.provider, audit, state, cancelled=cancelled)
             try:
                 result = (self.inspect_context(audit, state) if message.strip() == '/context'
                           else workflow.dispatch(message.strip()))

@@ -72,3 +72,64 @@ class ChatFeatureTests(unittest.TestCase):
         self.assertEqual(state['turns'], 0)
         self.assertEqual(Audit.open(self.ws, self.session).load()['messages'], old['messages'])
         self.assertEqual(self.service.provider.calls, [])
+
+    def test_stream_cancellation_saves_partial_without_committing_reply(self):
+        from threading import Event
+        from solar_forge.domain import ForgeError
+        stop = Event()
+        class StreamProvider:
+            def stream(self, system, messages):
+                yield 'First'
+                yield 'Second'
+        self.service.provider = StreamProvider()
+        chunks = []
+        def receive(text):
+            chunks.append(text)
+            stop.set()
+        with self.assertRaisesRegex(ForgeError, 'Stopped'):
+            self.service.send(self.session, 'hello', on_chunk=receive, cancelled=stop.is_set)
+        self.assertEqual(chunks, ['First'])
+        state = self.service.get(self.session)
+        self.assertEqual(state['pending_message'], 'hello')
+        self.assertEqual(state['messages'], [])
+        audit = Audit.open(self.ws, self.session)
+        partial = list((audit.path / 'calls').glob('*-partial.txt'))
+        self.assertEqual(partial[0].read_text(), 'First')
+
+    def test_ollama_stream_requires_completion_and_rejects_bad_data(self):
+        from io import BytesIO
+        from unittest.mock import patch
+        from solar_forge.providers import HTTPProvider
+        from solar_forge.domain import ForgeError
+        provider = HTTPProvider(Config(model='test'))
+        good = b'{"message":{"content":"Hi"},"done":false}\n{"done":true}\n'
+        for data, valid in [(good, True), (good.splitlines(keepends=True)[0], False),
+                            (b'{"message":{"content":4}}\n', False), (b'not-json\n', False)]:
+            with patch('solar_forge.providers.build_opener') as opener:
+                opener.return_value.open.return_value = BytesIO(data)
+                if valid:
+                    self.assertEqual(list(provider.stream('system', [])), ['Hi'])
+                else:
+                    with self.assertRaises(ForgeError):
+                        list(provider.stream('system', []))
+
+    def test_coding_stop_preserves_pending_action_without_writing(self):
+        from solar_forge.agent import approve, run
+        from solar_forge.workflow import prepare, plan
+        from solar_forge.domain import ForgeError
+        from test_workflow import ScriptedProvider
+        from threading import Event
+        cfg = self.service.config
+        audit = prepare(self.ws, cfg, DEFAULT_REQUEST, ScriptedProvider({'questions': []}))
+        plan(self.ws, cfg, audit, ScriptedProvider({'plan': '# Plan'}))
+        approve(audit)
+        stop = Event()
+        class StopProvider:
+            def complete(self, system, messages):
+                stop.set()
+                return json.dumps({'tool': 'write_file', 'path': 'app.py', 'content': 'value = 1'})
+        with self.assertRaisesRegex(ForgeError, 'Stopped'):
+            run(self.ws, cfg, audit, StopProvider(), cancelled=stop.is_set)
+        self.assertFalse((self.ws.root / 'app.py').exists())
+        self.assertEqual(audit.load()['pending_action']['path'], 'app.py')
+        self.assertEqual(audit.load()['status'], 'interrupted')

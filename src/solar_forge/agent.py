@@ -131,7 +131,7 @@ def execute(workspace: Workspace, config: Config, audit: Audit, state: dict, act
     return {'status': 'review_required', 'acceptance_criteria_verified': False}
 
 
-def run(workspace: Workspace, config: Config, audit: Audit, provider: Provider) -> None:
+def run(workspace: Workspace, config: Config, audit: Audit, provider: Provider, *, cancelled=None) -> None:
     state = audit.load()
     if state['status'] not in {'planned', 'executing', 'interrupted', 'turn_limit'}:
         raise ForgeError('This run needs answered questions and an approved plan before execution.')
@@ -147,6 +147,8 @@ def run(workspace: Workspace, config: Config, audit: Audit, provider: Provider) 
         state['messages'] = [{'role': 'user', 'content': 'Begin the approved plan. Inspect relevant files first.'}]
     try:
         while state['turns'] < config.max_turns or state.get('pending_action'):
+            if cancelled and cancelled():
+                raise ForgeError('Stopped by user between actions. Progress is saved.')
             if not state.get('pending_action'):
                 state['turns'] += 1
                 audit.save(state)
@@ -163,6 +165,8 @@ def run(workspace: Workspace, config: Config, audit: Audit, provider: Provider) 
                 audit.save(state)
                 audit.event('tool_attempted', turn=state['turns'], action=action)
             action = state['pending_action']
+            if cancelled and cancelled():
+                raise ForgeError('Stopped by user before executing the saved action.')
             try:
                 result = execute(workspace, config, audit, state, action)
                 audit.event('tool_result', turn=state['turns'], result=result)

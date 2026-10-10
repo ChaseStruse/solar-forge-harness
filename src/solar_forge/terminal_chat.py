@@ -2,6 +2,7 @@
 import asyncio
 import re
 import sys
+from threading import Event
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.document import Document
@@ -32,6 +33,8 @@ class TerminalChat:
         self.current = None
         self.sessions = []
         self.busy = False
+        self.stop_requested = Event()
+        self.partial_reply = ''
         self.exit_requested = False
         self.notice = 'Enter sends. Alt+Enter adds a line. /help lists actions.'
         self.history = TextArea(read_only=True, scrollbar=True, wrap_lines=False, width=Dimension.exact(28),
@@ -55,9 +58,9 @@ class TerminalChat:
                   display(self.current['provider'] + ' / ' + self.current['model'] if self.current else
                           self.service.config.kind + ' / ' + self.service.config.model), style='class:header'),
             body,
-            Label(lambda: (' /help Actions  Ctrl+L History  Ctrl+R Retry  Ctrl+Q Quit'
+            Label(lambda: (' /help Actions  Ctrl+L History  Ctrl+R Retry  Ctrl+X Stop  Ctrl+Q Quit'
                            if self.app.output.get_size().columns < 85 else
-                           ' /help Actions  Ctrl+N New  Ctrl+L History  Ctrl+R Retry  Tab Next pane  Ctrl+Q Quit'),
+                           ' /help Actions  Ctrl+N New  Ctrl+L History  Ctrl+R Retry  Ctrl+X Stop  Tab Next pane  Ctrl+Q Quit'),
                   style='class:footer'),
         ])
         self.app = Application(layout=Layout(root, focused_element=self.composer), key_bindings=keys,
@@ -123,6 +126,13 @@ class TerminalChat:
         def previous_pane(event):
             focus_previous(event)
 
+        @keys.add('c-x')
+        def stop(event):
+            if self.busy:
+                self.stop_requested.set()
+                self.notice = 'Stopping at the next reply chunk or coding action boundary…'
+                self.app.invalidate()
+
         @keys.add('c-q')
         @keys.add('c-c')
         @keys.add('c-d')
@@ -184,6 +194,8 @@ class TerminalChat:
                                for m in self.current['messages'])
             if self.current['pending_message']:
                 text += '\n\nYou (reply pending)\n' + display(self.current['pending_message'])
+        if self.partial_reply:
+            text += '\n\nForge (streaming; not yet complete)\n' + display(self.partial_reply)
         self.conversation.text = text
         self.conversation.buffer.cursor_position = len(text) if self.current else 0
         self.app.invalidate()
@@ -224,6 +236,14 @@ class TerminalChat:
         command = not retry and not asking and (message.startswith('/') or
                                                 bool(self.current and self.current.get('input_mode')))
         self.busy = True
+        self.stop_requested.clear()
+        self.partial_reply = ''
+        loop = asyncio.get_running_loop()
+        def append_chunk(chunk):
+            self.partial_reply += chunk
+            self.render()
+        def on_chunk(chunk):
+            loop.call_soon_threadsafe(append_chunk, chunk)
         self.notice = ('Coding… Your progress and changes are saved in the run audit.' if message == '/approve' else
                        'Working on your request…' if command else 'Your model is thinking…')
         try:
@@ -235,7 +255,8 @@ class TerminalChat:
                 self.composer.buffer.set_document(Document(''), bypass_readonly=True)
             self.render()
             if command:
-                self.current = await asyncio.to_thread(self.service.command, self.current['id'], message)
+                self.current = await asyncio.to_thread(self.service.command, self.current['id'], message,
+                                                      cancelled=self.stop_requested.is_set)
                 self.notice = ('Action could not finish. See the details above.' if self.current.get('command_error')
                                else 'Progress saved. Follow the next step above, or ask your model for help.')
                 if 'discarded_message' in self.current:
@@ -246,7 +267,8 @@ class TerminalChat:
 
             else:
                 self.current = await asyncio.to_thread(self.service.send, self.current['id'],
-                                                      None if retry else question if asking else message, retry=retry)
+                                                      None if retry else question if asking else message, retry=retry, on_chunk=on_chunk,
+                                                      cancelled=self.stop_requested.is_set)
                 self.notice = 'Reply saved. Enter sends your next message.'
         except (ForgeError, OSError) as exc:
             self.notice = display(str(exc)) + ('  Use /status to check progress.' if command else
@@ -261,6 +283,7 @@ class TerminalChat:
             if self.current:
                 self.current = self.service.get(self.current['id'])
         finally:
+            self.partial_reply = ''
             self.busy = False
             self.refresh_history()
             self.render()

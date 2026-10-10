@@ -86,9 +86,10 @@ def workflow_hint(workspace: Workspace, state: dict) -> str:
 
 
 class ChatWorkflow:
-    def __init__(self, workspace: Workspace, config: Config, provider: Provider, chat: Audit, state: dict):
+    def __init__(self, workspace: Workspace, config: Config, provider: Provider, chat: Audit, state: dict, *, cancelled=None):
         self.workspace, self.config, self.provider = workspace, config, provider
         self.chat, self.state = chat, state
+        self.cancelled = cancelled
 
     def selected(self, value: str = '') -> Audit:
         if value:
@@ -381,7 +382,7 @@ class ChatWorkflow:
                 approve(audit)
             self.state.pop('reviewed_plan', None)
             self.chat.save(self.state)
-            run(self.workspace, self.config, audit, self.provider)
+            run(self.workspace, self.config, audit, self.provider, cancelled=self.cancelled)
         result = self.status(audit)
         if audit.load()['status'] == 'review_required':
             result += '\n\nACTUAL SAVED CHANGES\n' + self.changes('')
