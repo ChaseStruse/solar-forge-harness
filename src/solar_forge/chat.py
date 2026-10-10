@@ -73,7 +73,62 @@ class ChatService:
                 sessions.append({k: data[k] for k in ('id', 'title', 'provider', 'model', 'updated_at')})
         return sorted(sessions, key=lambda s: s['updated_at'], reverse=True)
 
-    def send(self, session: str, message: str | None = None, *, retry: bool = False) -> dict:
+    def prompt_context(self, audit: Audit, state: dict) -> tuple[dict, str]:
+        name = state.get('request_path')
+        if not name:
+            try:
+                name = current_request(self.workspace)
+            except ForgeError:
+                name = None
+        context = collect(self.workspace, self.config, name)
+        context['request_path'] = name
+        context['project_request'] = read_request(self.workspace, name) if name and request_path(self.workspace, name).exists() else None
+        context['workflow'] = ChatWorkflow(self.workspace, self.config, self.provider, audit, state).context()
+        system = CHAT_SYSTEM + '\nChat commands:\n' + HELP + '\nProject context:\n' + json.dumps(context, ensure_ascii=False)
+        return context, system
+
+    def inspect_context(self, audit: Audit, state: dict) -> str:
+        context, system = self.prompt_context(audit, state)
+        used = len(json.dumps({'system': system, 'messages': state['messages']}, ensure_ascii=False).encode())
+        limit = self.config.max_prompt_bytes
+        lines = [f'Request: {context["request_path"] or "none selected"}',
+                 f'Prompt before your next message: {used:,} / {limit:,} bytes ({used / limit:.0%}).',
+                 'Included documents:']
+        lines.extend(f'- {name} ({len(text.encode()):,} bytes)' for name, text in context['documents'].items())
+        lines.extend(f'Skipped: {item["path"]} — {item["reason"]}' for item in context['skipped'])
+        lines.append('Binary/unsupported attachments, secret paths, symlinks, and excluded folders are not collected.')
+        lines.append('Includes current request, draft/run details, and conversation history; inventory is limited to 500 paths.')
+        if used >= limit * .8:
+            lines.append('Near or over the prompt limit. Use /continue for shorter history or narrow supporting context.')
+        return '\n'.join(lines)
+
+    def continue_chat(self, session: str) -> dict:
+        audit = self._open(session)
+        with audit.lock():
+            state = audit.load()
+            assert_identity(state, configured_identity(self.config))
+            if state.get('pending_message'):
+                raise ForgeError('Use /discard-pending before continuing in a new chat.')
+            # An extractive handoff avoids another model call and invented decisions.
+            excerpts = [m['content'][:600] for m in state['messages'] if m['role'] == 'user'][-4:]
+            summary = ('# Conversation handoff\n\nSource: ' + session +
+                       '\n\nRecent user excerpts (abridged; not a complete summary):\n\n' + '\n\n'.join(excerpts))
+            new = self.new()
+            target = self._open(new['id'])
+            following = target.load()
+            for key in ('request_path', 'workflow_run', 'request_draft', 'answering'):
+                if key in state:
+                    following[key] = state[key]
+            following.update(parent_chat=session, title='Continued: ' + state['title'][:55],
+                             messages=[{'role': 'user', 'content': summary}])
+            target.write('handoff.md', summary)
+            target.save(following)
+            self._transcript(target, following)
+            audit.event('chat_continued', child_chat=new['id'])
+            target.event('chat_continuation_created', parent_chat=session)
+        return self.get(new['id']) | {'command_error': None}
+
+    def send(self, session: str, message: str | None = None, *, retry: bool = False, on_chunk=None, cancelled=None) -> dict:
         audit = self._open(session)
         with audit.lock():
             state = audit.load()
@@ -99,19 +154,10 @@ class ChatService:
                 self._transcript(audit, state)
             messages = [*state['messages'], {'role': 'user', 'content': state['pending_message']}]
             try:
-                # Requests and coding state may change while the conversation stays open.
-                name = state.get('request_path')
-                if not name:
-                    try:
-                        name = current_request(self.workspace)
-                    except ForgeError:
-                        name = None
-                context = collect(self.workspace, self.config, name)
-                context['project_request'] = read_request(self.workspace, name) if name and request_path(self.workspace, name).exists() else None
-                context['workflow'] = ChatWorkflow(self.workspace, self.config, self.provider, audit, state).context()
+                context, system = self.prompt_context(audit, state)
                 audit.write('context.json', json.dumps(context, indent=2, ensure_ascii=False))
-                response = call(audit, self.provider, CHAT_SYSTEM + '\nChat commands:\n' + HELP + '\nProject context:\n' +
-                                json.dumps(context, ensure_ascii=False), messages, self.config.max_prompt_bytes)
+                response = call(audit, self.provider, system, messages, self.config.max_prompt_bytes,
+                                on_chunk=on_chunk, cancelled=cancelled)
             except Exception:
                 audit.event('chat_reply_failed')
                 raise
@@ -140,8 +186,10 @@ class ChatService:
             self._transcript(audit, state)
         return self.get(session) | {'command_error': None, 'discarded_message': message}
 
-    def command(self, session: str, message: str) -> dict:
+    def command(self, session: str, message: str, *, cancelled=None) -> dict:
         """User-entered actions only; provider replies never pass through this path."""
+        if message.strip() == '/continue':
+            return self.continue_chat(session)
         if message.strip() == '/discard-pending':
             return self.discard_pending(session)
         audit = self._open(session)
@@ -155,9 +203,10 @@ class ChatService:
                 raise ForgeError('Enter a command or answer within the configured file size limit.')
             state['messages'].append({'role': 'user', 'content': message.strip()})
             audit.event('chat_command_started', command=message.split(maxsplit=1)[0])
-            workflow = ChatWorkflow(self.workspace, self.config, self.provider, audit, state)
+            workflow = ChatWorkflow(self.workspace, self.config, self.provider, audit, state, cancelled=cancelled)
             try:
-                result = workflow.dispatch(message.strip())
+                result = (self.inspect_context(audit, state) if message.strip() == '/context'
+                          else workflow.dispatch(message.strip()))
             except (ForgeError, OSError, ValueError) as exc:
                 error = str(exc)
                 result = 'Action could not finish: ' + error + '\n\n' + workflow_hint(self.workspace, state)

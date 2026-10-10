@@ -33,7 +33,7 @@ def parse_json(text: str) -> dict:
     return data
 
 
-def call(audit: Audit, provider: Provider, system: str, messages: list[dict], max_prompt_bytes: int = 500000) -> str:
+def call(audit: Audit, provider: Provider, system: str, messages: list[dict], max_prompt_bytes: int = 500000, *, on_chunk=None, cancelled=None) -> str:
     state = audit.load()
     actual_identity = getattr(provider, 'audit_identity', None)
     identity = (dict(actual_identity) if actual_identity is not None else
@@ -48,12 +48,41 @@ def call(audit: Audit, provider: Provider, system: str, messages: list[dict], ma
               'system': system, 'messages': messages}
     audit.write(f"calls/{call_id}-input.json", json.dumps(record, ensure_ascii=False))
     audit.event("provider_call_started", call_id=call_id, identity=identity)
+    partial = []
     try:
-        result = provider.complete(system, messages)
+        if cancelled and cancelled():
+            raise ForgeError('Stopped by user.')
+        if on_chunk is not None:
+            stream = getattr(provider, 'stream', None)
+            chunks = stream(system, messages) if stream else iter([provider.complete(system, messages)])
+            try:
+                while True:
+                    if cancelled and cancelled():
+                        raise ForgeError('Stopped by user.')
+                    try:
+                        chunk = next(chunks)
+                    except StopIteration:
+                        break
+                    if cancelled and cancelled():
+                        raise ForgeError('Stopped by user.')
+                    partial.append(chunk)
+                    on_chunk(chunk)
+                result = ''.join(partial)
+            finally:
+                if hasattr(chunks, 'close'):
+                    chunks.close()
+        else:
+            result = provider.complete(system, messages)
+        if cancelled and cancelled():
+            raise ForgeError('Stopped by user.')
+        if not result.strip():
+            raise ForgeError('Provider returned no usable text.')
         audit.write(f"calls/{call_id}-output.txt", result)
         audit.event("provider_call_finished", call_id=call_id)
         return result
     except Exception:
+        if partial:
+            audit.write(f"calls/{call_id}-partial.txt", ''.join(partial))
         audit.event("provider_call_failed", call_id=call_id)
         raise
 
@@ -161,7 +190,7 @@ def plan(workspace: Workspace, config: Config, audit: Audit, provider: Provider)
     content["instruction"] = (
         'Return {"plan":"Markdown implementation plan"}. Include concrete steps, '
         'decisions grounded in recorded answers, files affected, acceptance-criterion '
-        'verification, and proposed user-run checks. No shell runner exists. '
+        'verification, and proposed user-run checks. Use headings: Affected files, Implementation steps, Verification, Risks. No shell runner exists. '
         'Honor changes already made if this is a revised plan.')
     data = parse_json(call(audit, provider, SYSTEM, [{"role": "user", "content": json.dumps(content)}], config.max_prompt_bytes))
     text = data.get("plan")
