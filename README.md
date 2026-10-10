@@ -54,6 +54,12 @@ file and context limits. Other file types may be stored there but are not sent
 to the model. Secret paths, symlinks, and excluded directories are not collected.
 Changes to supporting text documents require a new preparation before coding.
 
+Model file tools reject `request.md`, `implementation-plan.md`, and
+`*-implementation-plan.md` anywhere, legacy `requests/` and `docs/requests/`
+directories, and root-level `plan.md`, `summary.md`, `questions.md`, `decisions.md`,
+`context.md`, `progress.md`, and `verification.md`. The workflow writes audit
+artifacts internally; application source and maintained product docs remain editable.
+
 All request-specific plans, model call records, change snapshots, and audits must
 stay under `agentic_audit/`. Application source edits still go to their normal
 project paths. Existing external requests must be moved into a bundle before

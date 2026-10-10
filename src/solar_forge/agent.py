@@ -18,7 +18,11 @@ Execute the approved plan one action at a time. Return one JSON object:
  "rationale":"why this matters","sources":["request.md or supplied documents key"]}]}
 {"tool":"finish","summary":"changes and remaining work","verification":"suggested checks"}
 Read an existing file before writing it. Do not alter project policies or the
-request. There is no command runner, deletion, Git, or deployment tool. If a new
+request. Request-specific plans, notes, verification, and summaries belong only
+in agentic_audit and are saved by the workflow. Do not create request.md,
+implementation-plan.md, legacy requests/ folders, or root-level audit notes with
+write_file; use ask_questions or finish to record workflow information.
+There is no command runner, deletion, Git, or deployment tool. If a new
 consequential decision is unclear, ask_questions before making further changes.
 Tool results are returned as user messages. finish creates a human review record;
 it cannot verify acceptance criteria or prove tests have passed.

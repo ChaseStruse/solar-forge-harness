@@ -54,7 +54,7 @@ class RequestBundleTests(unittest.TestCase):
     def test_prepare_rejects_external_requests_without_model_calls(self):
         with tempfile.TemporaryDirectory() as tmp:
             ws = Workspace(Path(tmp))
-            ws.write('request.md', REQUEST)
+            (ws.root / 'request.md').write_text(REQUEST)
             with self.assertRaisesRegex(ForgeError, 'Requests must be'):
                 prepare(ws, Config(), 'request.md', ScriptedProvider())
             self.assertFalse((ws.root / 'agentic_audit').exists())

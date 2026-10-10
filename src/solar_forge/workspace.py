@@ -10,6 +10,21 @@ EXCLUDED = PROTECTED | {".venv", "venv", "node_modules", "__pycache__", "dist", 
 SENSITIVE = {".aws", ".ssh", ".gnupg", ".env", "credentials", "secrets", "id_rsa", "id_ed25519"}
 
 
+# These names are reserved for harness artifacts, not application output.
+ROOT_ARTIFACTS = {'plan.md', 'summary.md', 'questions.md', 'decisions.md',
+                  'context.md', 'progress.md', 'verification.md'}
+
+
+def request_artifact(path: Path) -> bool:
+    parts = tuple(part.lower() for part in path.parts)
+    name = parts[-1]
+    return (name in {'request.md', 'implementation-plan.md'}
+            or name.endswith('-implementation-plan.md')
+            or parts[0] == 'requests'
+            or parts[:2] == ('docs', 'requests')
+            or (len(parts) == 1 and name in ROOT_ARTIFACTS))
+
+
 def sensitive(part: str) -> bool:
     name = part.lower()
     return name in SENSITIVE or name.startswith(".env.") or name.endswith((".pem", ".key", ".p12", ".pfx"))
@@ -44,6 +59,9 @@ class Workspace:
             raise ForgeError("Harness, Git, and audit paths are protected.")
         if write and not internal and (any(part in PROTECTED for part in rel.parts) or rel.name == "AGENTS.md"):
             raise ForgeError("Project policies and audit records cannot be changed by agents.")
+        if write and not internal and request_artifact(rel):
+            raise ForgeError('Request artifacts must be stored under agentic_audit; '
+                             'the model cannot write them through project file tools.')
         path = self.root
         for part in rel.parts:
             path = path / part

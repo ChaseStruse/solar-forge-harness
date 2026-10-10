@@ -91,6 +91,27 @@ class AgentTests(unittest.TestCase):
             approve(audit)
             run(ws, cfg, audit, provider)
             self.assertEqual(read_request(ws, DEFAULT_REQUEST), REQUEST)
+            self.assertFalse((ws.root / 'request.md').exists())
+            self.assertIn('Request artifacts must be stored', audit.read('events.jsonl'))
+
+    def test_reserved_artifact_writes_are_rejected_but_application_files_work(self):
+        denied = ['request.md', 'docs/REQUEST.md', 'requests/billing.md',
+                  'docs/requests/billing/context.txt', 'implementation-plan.md',
+                  'docs/chat-implementation-plan.md', 'plan.md', 'summary.md',
+                  'progress.md', 'verification.md']
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, cfg, audit, provider = self.setup_run(tmp,
+                *({'tool': 'write_file', 'path': name, 'content': 'artifact'} for name in denied),
+                {'tool': 'write_file', 'path': 'src/requests.py', 'content': '# Application code'},
+                {'tool': 'write_file', 'path': 'docs/features.md', 'content': '# Product documentation'},
+                {'tool': 'finish', 'summary': 'Done', 'verification': 'Review'})
+            approve(audit)
+            run(ws, cfg, audit, provider)
+            for name in denied:
+                self.assertFalse((ws.root / name).exists(), name)
+            self.assertTrue((ws.root / 'src/requests.py').exists())
+            self.assertTrue((ws.root / 'docs/features.md').exists())
+            self.assertTrue((audit.path / 'summary.md').exists())
 
     def test_pending_write_recovery(self):
         with tempfile.TemporaryDirectory() as tmp:
