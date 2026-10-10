@@ -95,10 +95,9 @@ def main(argv=None) -> int:
             if args.audit:
                 show(Audit.open(workspace, args.audit), workspace)
             else:
-                root = workspace.path('agentic_audit', internal=True)
-                runs = sorted(root.glob('*/*/state.json')) if root.exists() else []
-                for state_path in runs:
-                    show(Audit.open(workspace, state_path.parent.relative_to(workspace.root).as_posix()), workspace)
+                runs = Audit.discover(workspace)
+                for audit in runs:
+                    show(audit, workspace)
                 if not runs:
                     print('No audited runs yet. Start with forge prepare.')
             return 0

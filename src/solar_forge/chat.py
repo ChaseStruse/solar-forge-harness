@@ -65,11 +65,9 @@ class ChatService:
             'workflow_hint': workflow_hint(self.workspace, state)}
 
     def list(self) -> list[dict]:
-        root = self.workspace.path('agentic_audit', internal=True)
         sessions = []
-        for path in root.glob('*/*/state.json'):
-            session = path.parent.relative_to(self.workspace.root).as_posix()
-            audit = Audit.open(self.workspace, session)
+        for audit in Audit.discover(self.workspace):
+            session = audit.path.relative_to(self.workspace.root).as_posix()
             if audit.load().get('run_kind') == 'chat':
                 data = self.get(session)
                 sessions.append({k: data[k] for k in ('id', 'title', 'provider', 'model', 'updated_at')})

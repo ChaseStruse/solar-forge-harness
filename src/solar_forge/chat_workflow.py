@@ -152,11 +152,9 @@ class ChatWorkflow:
         return '\n\n'.join(patches) if patches else 'No saved changes' + (f' for {chosen}.' if chosen else ' yet.')
 
     def list_runs(self) -> str:
-        root = self.workspace.path('agentic_audit', internal=True)
         runs = []
-        for path in sorted(root.glob('*/*/state.json'), reverse=True):
-            relative = path.parent.relative_to(self.workspace.root).as_posix()
-            audit = Audit.open(self.workspace, relative)
+        for audit in Audit.discover(self.workspace):
+            relative = audit.path.relative_to(self.workspace.root).as_posix()
             state = audit.load()
             if state.get('run_kind') != 'chat':
                 runs.append((relative, state))

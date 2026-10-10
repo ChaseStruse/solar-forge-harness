@@ -15,6 +15,31 @@ from test_workflow import ScriptedProvider
 
 
 class RequestBundleTests(unittest.TestCase):
+    def test_state_attachment_does_not_break_run_discovery(self):
+        from solar_forge.audit import Audit
+        from solar_forge.chat import ChatService
+        from solar_forge.domain import Request
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Workspace(Path(tmp))
+            write_request(ws, DEFAULT_REQUEST, REQUEST)
+            attachment = ws.root / Path(DEFAULT_REQUEST).parent / 'state.json'
+            attachment.write_text('not even JSON')
+            # A real run with the slug "requests" must still be discoverable.
+            run = Audit.create(ws, Request.parse(REQUEST.replace('Add billing export', 'Requests')))
+            service = ChatService(ws, Config(model='test'), ScriptedProvider())
+            session = service.new()['id']
+            self.assertEqual(len(service.list()), 1)
+            result = service.command(session, '/runs')
+            self.assertIsNone(result['command_error'])
+            self.assertIn(run.path.relative_to(ws.root).as_posix(), result['messages'][-1]['content'])
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(['--project', tmp, 'status']), 0)
+            self.assertIn('Requests', out.getvalue())
+            run.write('state.json', '{broken')
+            with self.assertWarnsRegex(RuntimeWarning, 'Skipping unreadable run'):
+                self.assertEqual(len(service.list()), 1)
+
     def test_cli_requires_bundle_and_uses_title(self):
         with tempfile.TemporaryDirectory() as tmp, redirect_stdout(StringIO()), redirect_stderr(StringIO()):
             root = Path(tmp)
