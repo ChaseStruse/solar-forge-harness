@@ -153,7 +153,7 @@ class ChatService:
             if (state['provider'], state['model']) != (self.config.kind, self.config.model):
                 raise ForgeError('This conversation uses another model. Start a new chat with the current configuration.')
             if state.get('pending_message'):
-                raise ForgeError('Retry with Ctrl+R or use /discard-pending to edit the message and continue this chat.')
+                raise ForgeError('Retry the pending model message with Ctrl+R or use /discard-pending to edit it and continue this chat.')
             if not message.strip() or len(message.encode('utf-8')) > self.config.max_file_bytes:
                 raise ForgeError('Enter a command or answer within the configured file size limit.')
             state['messages'].append({'role': 'user', 'content': message.strip()})
