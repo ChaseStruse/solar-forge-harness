@@ -27,6 +27,27 @@ class WideOutput(DummyOutput):
 
 
 class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
+    async def test_discard_pending_returns_editable_advice_during_request_draft(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            service = ChatService(Workspace(Path(tmp)), Config(model='test', max_prompt_bytes=100), TextProvider())
+            ui = TerminalChat(service, input=pipe, output=DummyOutput())
+            ui.composer.text = '/request Calculator'
+            await ui.send()
+            session = ui.current['id']
+            ui.composer.text = '/ask Help with this draft'
+            await ui.send()
+            self.assertEqual(ui.current['pending_message'], 'Help with this draft')
+            ui.composer.text = '/discard-pending'
+            await ui.send()
+            self.assertEqual(ui.current['id'], session)
+            self.assertIsNone(ui.current['pending_message'])
+            self.assertEqual(ui.current['input_mode'], 'request')
+            self.assertEqual(ui.composer.text, '/ask Help with this draft')
+            ui.composer.text = '/cancel'
+            await ui.send()
+            self.assertIsNone(ui.current['input_mode'])
+            self.assertFalse(ui.busy)
+
     async def test_workflow_actions_and_model_advice_inside_window(self):
         with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
             root = Path(tmp)

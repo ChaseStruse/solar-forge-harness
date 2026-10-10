@@ -222,6 +222,7 @@ You can complete the request workflow in this window:
 | `/discover` | Retry failed preparation for the selected run |
 | `/next` | Take the next available step; coding still requires `/approve` |
 | `/ask TEXT` | Ask your model for advice at any step |
+| `/discard-pending` | Discard a failed model message; return it to the composer for editing and continue the same chat |
 | `/cancel` | Leave request drafting, question answering, or plan review |
 | `/help` | Show all available actions |
 

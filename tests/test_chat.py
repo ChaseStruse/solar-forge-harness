@@ -1,5 +1,6 @@
 from contextlib import redirect_stdout, redirect_stderr
 from io import StringIO
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -65,6 +66,35 @@ class ChatServiceTests(unittest.TestCase):
             self.assertEqual([m['role'] for m in result['messages']], ['user', 'assistant'])
             self.assertIsNone(result['pending_message'])
             self.assertEqual(provider.calls[0][1], provider.calls[1][1])
+
+    def test_discard_budget_failure_preserves_history_and_selected_run(self):
+        from solar_forge.audit import Audit
+        from test_foundation import REQUEST
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Workspace(Path(tmp))
+            write_request(ws, DEFAULT_REQUEST, REQUEST)
+            provider = TextProvider(json.dumps({'questions': []}), 'Hello', 'Recovered')
+            service = ChatService(ws, Config(model='test', max_prompt_bytes=20000), provider)
+            session = service.new()['id']
+            prepared = service.command(session, '/prepare')
+            self.assertIsNone(prepared['command_error'])
+            service.send(session, 'hello')
+            before = service.get(session)
+            with self.assertRaisesRegex(ForgeError, 'Prompt exceeds'):
+                service.send(session, 'x' * 20000)
+            with self.assertRaisesRegex(ForgeError, 'Prompt exceeds'):
+                service.send(session, retry=True)
+            self.assertEqual(len(provider.calls), 2)
+            result = service.command(session, '/discard-pending')
+            self.assertIsNone(result['pending_message'])
+            self.assertEqual(result['discarded_message'], 'x' * 20000)
+            self.assertEqual(result['messages'], before['messages'])
+            self.assertEqual(result['workflow_run'], before['workflow_run'])
+            self.assertIn('chat_message_discarded', Audit.open(ws, session).read('events.jsonl'))
+            self.assertIsNone(service.command(session, '/status')['command_error'])
+            self.assertIsNone(service.send(session, 'shorter question')['pending_message'])
+            with self.assertRaisesRegex(ForgeError, 'no pending'):
+                service.command(session, '/discard-pending')
 
     def test_limits_model_mismatch_and_no_pending_retry(self):
         with tempfile.TemporaryDirectory() as tmp:

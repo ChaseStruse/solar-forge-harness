@@ -27,6 +27,7 @@ HELP = '''Work on a request here in chat:
   /use NUMBER        Continue a run from that list (a run path also works)
   /discover          Retry failed preparation for the selected run
   /next              Take the next step; coding still requires /approve
+  /discard-pending   Discard a failed model message so you can edit it or continue
   /cancel            Leave request drafting, question answering, or plan review
   /ask TEXT          Ask your model for help at any step
   /help              Show these instructions

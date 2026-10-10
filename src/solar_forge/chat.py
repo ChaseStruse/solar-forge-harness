@@ -84,7 +84,7 @@ class ChatService:
                     raise ForgeError('There is no pending message to retry.')
             else:
                 if state.get('pending_message'):
-                    raise ForgeError('Retry the pending message before sending a new one.')
+                    raise ForgeError('Retry the pending message or use /discard-pending before sending a new one.')
                 if not isinstance(message, str) or not message.strip():
                     raise ForgeError('Enter a nonempty message.')
                 if len(message.encode()) > self.config.max_file_bytes:
@@ -125,8 +125,27 @@ class ChatService:
             audit.event('chat_reply_recorded', turn=state['turns'])
         return self.get(session)
 
+    def discard_pending(self, session: str) -> dict:
+        """Keep a cancelled message in the audit without trapping the conversation."""
+        audit = self._open(session)
+        with audit.lock():
+            state = audit.load()
+            if (state['provider'], state['model']) != (self.config.kind, self.config.model):
+                raise ForgeError('This conversation uses another model. Reopen it with its original model.')
+            message = state.get('pending_message')
+            if not message:
+                raise ForgeError('There is no pending message to discard.')
+            audit.event('chat_message_discarded', message=message)
+            state['pending_message'] = None
+            state['updated_at'] = now()
+            audit.save(state)
+            self._transcript(audit, state)
+        return self.get(session) | {'command_error': None, 'discarded_message': message}
+
     def command(self, session: str, message: str) -> dict:
         """User-entered actions only; provider replies never pass through this path."""
+        if message.strip() == '/discard-pending':
+            return self.discard_pending(session)
         audit = self._open(session)
         error = None
         with audit.lock():
@@ -134,7 +153,7 @@ class ChatService:
             if (state['provider'], state['model']) != (self.config.kind, self.config.model):
                 raise ForgeError('This conversation uses another model. Start a new chat with the current configuration.')
             if state.get('pending_message'):
-                raise ForgeError('Retry the pending model message with Ctrl+R, or start a new chat before taking workflow actions.')
+                raise ForgeError('Retry with Ctrl+R or use /discard-pending to edit the message and continue this chat.')
             if not message.strip() or len(message.encode('utf-8')) > self.config.max_file_bytes:
                 raise ForgeError('Enter a command or answer within the configured file size limit.')
             state['messages'].append({'role': 'user', 'content': message.strip()})
