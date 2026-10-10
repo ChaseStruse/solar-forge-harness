@@ -2,16 +2,23 @@
 import hashlib
 import json
 import shlex
+import re
 
 from .agent import approve, run
 from .audit import Audit
 from .domain import Config, ForgeError, Request
-from .requests import current_request, request_name, request_path, read_request, write_request
+from .requests import ROOT, current_request, request_name, request_path, read_request, write_request
 from .providers import Provider, assert_identity, configured_identity
 from .workflow import assert_current, discover, plan, plan_digest, prepare, record_answer
 from .workspace import Workspace
 
 HELP = '''Work on a request here in chat:
+  /requests          List request bundles and latest run status
+  /select NUMBER     Select a request from /requests
+  /edit-request      Open the selected request for editing
+  /edit FIELD TEXT   Edit title, description, technical_details, or acceptance_criteria
+  /context           Inspect included context and prompt budget
+  /continue          Start a linked conversation with a compact saved handoff
   /request           Create a request, one question at a time
   /request show      Read the selected request
   /save-request      Save the request you have drafted
@@ -164,6 +171,82 @@ class ChatWorkflow:
             f'{i}. {state["title"]} — {state["status"]}\n   {relative}'
             for i, (relative, state) in enumerate(runs, 1)) + '\n\nUse /use NUMBER to continue a run.'
 
+    def requests(self, value: str = '') -> str:
+        if value:
+            if self.state.get('request_draft'):
+                raise ForgeError('Save or /cancel the draft before selecting another request.')
+            choices = self.state.get('request_choices', [])
+            if not value.isdigit() or not 1 <= int(value) <= len(choices):
+                raise ForgeError('Use /requests, then /select NUMBER.')
+            name = choices[int(value) - 1]
+            read_request(self.workspace, name)
+            self.state['request_path'] = name
+            for key in ('workflow_run', 'reviewed_plan', 'answering'):
+                self.state.pop(key, None)
+            return f'Selected {name}. Use /edit-request or /prepare.'
+        statuses = {}
+        for audit in sorted(Audit.discover(self.workspace), key=lambda a: a.load()['created_at']):
+            state = audit.load()
+            if state.get('request_path'):
+                statuses[state['request_path']] = state['status']
+        choices, lines = [], []
+        for path in sorted(self.workspace.path(ROOT, internal=True).glob('*/request.md')):
+            name = path.relative_to(self.workspace.root).as_posix()
+            try:
+                text = read_request(self.workspace, name)
+                title = Request.parse(text).title
+                status = statuses.get(name, 'not prepared')
+            except (ForgeError, OSError) as exc:
+                title, status = path.parent.name, str(exc)
+            choices.append(name)
+            lines.append(f'{len(choices)}. {title} — {status}\n   {name}')
+        self.state['request_choices'] = choices
+        return '\n'.join(lines) + '\nUse /select NUMBER.' if choices else 'No requests yet. Use /request TITLE.'
+
+    def edit_request(self) -> str:
+        if self.state.get('request_draft'):
+            raise ForgeError('A draft is already open. Use /edit FIELD TEXT.')
+        name = current_request(self.workspace, self.state.get('request_path'))
+        text = read_request(self.workspace, name)
+        request = Request.parse(text)
+        self.state['request_draft'] = {
+            'path': name, 'before_sha256': file_hash(text), 'stage': 'review', 'markdown': text,
+            'fields': {key: getattr(request, key) for key in
+                       ('title', 'description', 'technical_details', 'acceptance_criteria')}}
+        self.state.pop('reviewed_plan', None)
+        self.state.pop('answering', None)
+        return text + '\nUse /edit FIELD TEXT, then /save-request. The folder name stays unchanged.'
+
+    def edit_field(self, value: str) -> str:
+        draft = self.state.get('request_draft')
+        parts = value.split(maxsplit=1)
+        fields = ('title', 'description', 'technical_details', 'acceptance_criteria')
+        if not draft or len(parts) != 2 or parts[0] not in fields:
+            raise ForgeError('Open /request or /edit-request, then /edit FIELD TEXT. Fields: ' + ', '.join(fields))
+        field, text = parts
+        if field == 'title' and ('\n' in text or '\r' in text or text == 'Your request title'):
+            raise ForgeError('Give your request a title on one line.')
+        if 'markdown' in draft:
+            markdown = draft['markdown']
+            pattern = (r'^#\s+[^\n]*' if field == 'title' else
+                       r'^##\s+' + re.escape(field.replace('_', ' ')) + r'\s*\n.*?(?=^##\s|\Z)')
+            replacement = '# Request: ' + text if field == 'title' else '## ' + field.replace('_', ' ').title() + '\n' + text + '\n\n'
+            markdown = re.sub(pattern, lambda _: replacement, markdown, count=1, flags=re.M | re.S | re.I)
+            Request.parse(markdown)
+            draft['markdown'] = markdown
+        draft['fields'][field] = text
+        if 'path' not in draft and field == 'title':
+            name = request_name(text)
+            draft['path'] = name
+            path = request_path(self.workspace, name)
+            draft['before_sha256'] = file_hash(read_request(self.workspace, name) if path.exists() else None)
+        missing = next((key for key in fields if not draft['fields'].get(key)), None)
+        draft['stage'] = missing or 'review'
+        if not missing and 'markdown' not in draft:
+            draft['markdown'] = self.request_markdown(draft['fields'])
+        return (draft.get('markdown', f'Updated {field}. Next field: {missing}.') +
+                '\nUse /edit FIELD TEXT or /save-request when ready.')
+
     def start_request(self, title: str) -> str:
         if self.state.get('request_draft'):
             raise ForgeError('A request draft is already open. Continue it, /save-request, or /cancel first.')
@@ -306,6 +389,14 @@ class ChatWorkflow:
             return self.respond(message)
         parts = message.split(maxsplit=1)
         command, value = parts[0].lower(), parts[1].strip() if len(parts) > 1 else ''
+        if command == '/requests':
+            return self.requests()
+        if command == '/select':
+            return self.requests(value)
+        if command == '/edit-request':
+            return self.edit_request()
+        if command == '/edit':
+            return self.edit_field(value)
         if command == '/help':
             return HELP
         if command == '/cancel':
