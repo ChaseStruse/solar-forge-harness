@@ -6,7 +6,7 @@ from .audit import Audit, now
 from .chat_workflow import ChatWorkflow, HELP, input_mode, workflow_hint
 from .context import collect
 from .domain import Config, ForgeError, Request
-from .providers import Provider
+from .providers import Provider, assert_identity, configured_identity
 from .workflow import call
 from .workspace import Workspace
 
@@ -48,7 +48,7 @@ class ChatService:
         audit = Audit.create(self.workspace, request)
         audit.write('context.json', json.dumps(context, indent=2, ensure_ascii=False))
         state = audit.load()
-        state.update(run_kind='chat', status='chatting', provider=self.config.kind, model=self.config.model,
+        state.update(run_kind='chat', status='chatting', **configured_identity(self.config),
                      title='New chat', updated_at=now(), pending_message=None)
         audit.save(state)
         audit.write('transcript.md', '# New chat\n')
@@ -77,8 +77,7 @@ class ChatService:
         audit = self._open(session)
         with audit.lock():
             state = audit.load()
-            if (state['provider'], state['model']) != (self.config.kind, self.config.model):
-                raise ForgeError('This conversation uses another model. Start a new chat with the current configuration.')
+            assert_identity(state, configured_identity(self.config))
             if retry:
                 if not state.get('pending_message'):
                     raise ForgeError('There is no pending message to retry.')
@@ -130,8 +129,7 @@ class ChatService:
         audit = self._open(session)
         with audit.lock():
             state = audit.load()
-            if (state['provider'], state['model']) != (self.config.kind, self.config.model):
-                raise ForgeError('This conversation uses another model. Reopen it with its original model.')
+            assert_identity(state, configured_identity(self.config))
             message = state.get('pending_message')
             if not message:
                 raise ForgeError('There is no pending message to discard.')
@@ -150,8 +148,7 @@ class ChatService:
         error = None
         with audit.lock():
             state = audit.load()
-            if (state['provider'], state['model']) != (self.config.kind, self.config.model):
-                raise ForgeError('This conversation uses another model. Start a new chat with the current configuration.')
+            assert_identity(state, configured_identity(self.config))
             if state.get('pending_message'):
                 raise ForgeError('Retry the pending model message with Ctrl+R or use /discard-pending to edit it and continue this chat.')
             if not message.strip() or len(message.encode('utf-8')) > self.config.max_file_bytes:

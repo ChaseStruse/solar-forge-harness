@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 from threading import Thread
 import unittest
+from unittest.mock import patch
 
 from solar_forge.requests import DEFAULT_REQUEST, read_request, write_request
 from solar_forge.cli import main
@@ -20,6 +21,50 @@ class CLITests(unittest.TestCase):
             code = main(['--project', str(root), *arguments])
         self.assertEqual(code, 0, err.getvalue())
         return out.getvalue()
+
+    def test_existing_run_rejects_identity_overrides_before_call_or_approval(self):
+        from solar_forge.domain import Config
+        from solar_forge.workflow import prepare, plan
+        from solar_forge.workspace import Workspace
+        from test_workflow import ScriptedProvider
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ws = Workspace(root)
+            write_request(ws, DEFAULT_REQUEST, REQUEST)
+            cfg = Config(model='original')
+            audit = prepare(ws, cfg, DEFAULT_REQUEST, ScriptedProvider({'questions': []}))
+            plan(ws, cfg, audit, ScriptedProvider({'plan': '# Plan'}))
+            (root / '.forge').mkdir()
+            config_path = root / '.forge/config.toml'
+            original = '[provider]\nkind = "ollama"\nmodel = "original"\n'
+            relative = audit.path.relative_to(root).as_posix()
+            cases = [(original, ['--model', 'replacement']),
+                     (original, ['--provider', 'compatible']),
+                     (original.replace('original', 'replacement'), []),
+                     (original + 'base_url = "http://localhost:11435"\n', [])]
+            for config_text, flags in cases:
+                config_path.write_text(config_text)
+                for command in ('discover', 'plan', 'run'):
+                    with self.subTest(command=command, flags=flags, config=config_text), \
+                            patch('solar_forge.providers.post_json') as post, \
+                            redirect_stderr(StringIO()) as err, redirect_stdout(StringIO()):
+                        args = ['--project', tmp, command, relative, *flags]
+                        if command == 'run':
+                            args.append('--approve')
+                        self.assertEqual(main(args), 1)
+                        self.assertIn('different model, provider, or endpoint', err.getvalue())
+                        post.assert_not_called()
+                        self.assertIsNone(audit.load()['approved_plan'])
+            # Legacy audit state lacking endpoint remains usable with its saved model.
+            config_path.write_text(original)
+            state = audit.load()
+            state.pop('endpoint')
+            audit.save(state)
+            with patch('solar_forge.providers.post_json', return_value={
+                    'message': {'content': json.dumps({'plan': '# Updated plan'})}}):
+                self.invoke(root, 'plan', relative)
+            record = json.loads(next((audit.path / 'calls').glob('*-input.json')).read_text())
+            self.assertIn('identity', record)
 
     def test_full_workflow_over_local_http(self):
         responses = iter([

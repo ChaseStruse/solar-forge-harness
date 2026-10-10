@@ -373,3 +373,14 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 Tests use scripted responses, mocked adapter payloads, and a temporary loopback
 HTTP server to exercise the complete CLI. No paid model calls or real credentials
 are needed. The HTTP integration test requires permission to open a local socket.
+
+### Provider identity in audits
+
+Existing runs and chats remain bound to their saved provider, model, and endpoint.
+Restore those settings to resume, or prepare a new run to switch models/services.
+CLI overrides cannot change an existing run's identity. Historical audits without
+an endpoint field still enforce their recorded provider and model.
+Each new HTTP call records its provider, model, and full request endpoint in its
+input audit and start event, including failed calls. API keys and authorization
+headers are excluded. Non-HTTP adapters without identity metadata are explicitly
+labelled as using the run's declared configuration.

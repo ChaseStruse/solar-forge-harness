@@ -1,6 +1,7 @@
 from contextlib import redirect_stdout, redirect_stderr
 from io import StringIO
 import json
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
@@ -95,6 +96,19 @@ class ChatServiceTests(unittest.TestCase):
             self.assertIsNone(service.send(session, 'shorter question')['pending_message'])
             with self.assertRaisesRegex(ForgeError, 'no pending'):
                 service.command(session, '/discard-pending')
+
+    def test_endpoint_change_is_rejected_for_existing_chat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Workspace(Path(tmp))
+            config = Config(model='test')
+            service = ChatService(ws, config, TextProvider())
+            session = service.new()['id']
+            changed = ChatService(ws, replace(config, base_url='http://localhost:11435'), TextProvider())
+            for operation in (lambda: changed.send(session, 'hello'),
+                              lambda: changed.command(session, '/request New request')):
+                with self.assertRaisesRegex(ForgeError, 'endpoint'):
+                    operation()
+            self.assertEqual(service.get(session)['messages'], [])
 
     def test_limits_model_mismatch_and_no_pending_retry(self):
         with tempfile.TemporaryDirectory() as tmp:

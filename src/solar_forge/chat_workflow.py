@@ -7,7 +7,7 @@ from .agent import approve, run
 from .audit import Audit
 from .domain import Config, ForgeError, Request
 from .requests import current_request, request_name, request_path, read_request, write_request
-from .providers import Provider
+from .providers import Provider, assert_identity, configured_identity
 from .workflow import assert_current, discover, plan, plan_digest, prepare, record_answer
 from .workspace import Workspace
 
@@ -110,10 +110,7 @@ class ChatWorkflow:
         return Audit.open(self.workspace, self.state['workflow_run'])
 
     def check_model(self, audit: Audit) -> None:
-        state = audit.load()
-        if (state.get('provider'), state.get('model')) != (self.config.kind, self.config.model):
-            raise ForgeError('This run uses a different model. Reopen forge chat with its --provider and --model, '
-                             'or use /prepare to start a run with your current model.')
+        assert_identity(audit.load(), configured_identity(self.config))
 
     def status(self, audit: Audit) -> str:
         state = audit.load()

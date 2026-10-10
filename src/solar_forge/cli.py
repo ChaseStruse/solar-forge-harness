@@ -9,7 +9,7 @@ from .agent import approve, run
 from .audit import Audit
 from .chat import ChatService
 from .domain import Config, ForgeError, REQUEST_TEMPLATE
-from .providers import HTTPProvider
+from .providers import HTTPProvider, assert_identity, configured_identity
 from .requests import current_request, request_name, request_path
 from .setup import create, initialize
 from .workflow import discover, plan, prepare, record_answer
@@ -135,6 +135,7 @@ def main(argv=None) -> int:
             return 0
         audit = Audit.open(workspace, args.audit)
         with audit.lock():
+            assert_identity(audit.load(), configured_identity(config))
             if args.command == 'discover':
                 discover(audit, provider, config.max_prompt_bytes)
             elif args.command == 'plan':
