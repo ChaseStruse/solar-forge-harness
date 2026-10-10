@@ -56,7 +56,13 @@ def call(audit: Audit, provider: Provider, system: str, messages: list[dict], ma
             stream = getattr(provider, 'stream', None)
             chunks = stream(system, messages) if stream else iter([provider.complete(system, messages)])
             try:
-                for chunk in chunks:
+                while True:
+                    if cancelled and cancelled():
+                        raise ForgeError('Stopped by user.')
+                    try:
+                        chunk = next(chunks)
+                    except StopIteration:
+                        break
                     if cancelled and cancelled():
                         raise ForgeError('Stopped by user.')
                     partial.append(chunk)

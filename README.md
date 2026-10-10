@@ -191,6 +191,7 @@ multiline composer. No browser or local web server is needed.
 | Ctrl+N | Start a new chat |
 | Ctrl+L | Focus history; show numbered history on narrow terminals |
 | Ctrl+R | Retry a saved pending message |
+| Ctrl+X | Request a stop at the next reply chunk or coding action boundary |
 | Ctrl+Q / Ctrl+C / Ctrl+D | Exit after any active reply or workflow action has been saved |
 
 On narrow terminals, use Ctrl+L, then type `/open NUMBER` in the composer to
@@ -207,6 +208,12 @@ You can complete the request workflow in this window:
 
 | Chat command | What it does |
 | --- | --- |
+| `/requests` | List request titles, paths, and latest run states |
+| `/select NUMBER` | Select a bundle from `/requests` |
+| `/edit-request` | Open the selected request for editing |
+| `/edit FIELD TEXT` | Update `title`, `description`, `technical_details`, or `acceptance_criteria` in a draft |
+| `/context` | Inspect included documents, exclusions, and prompt bytes; warns at 80% of the limit |
+| `/continue` | Open a linked conversation with a compact handoff, preserving the request, run, and draft |
 | `/request [TITLE]` | Draft a request bundle, one question at a time |
 | `/request show` | Read the current request |
 | `/save-request` | Save the finished draft; saves to the title’s request folder, with an explicit replacement notice if it exists |
@@ -259,7 +266,7 @@ failed reply. Existing conversations from the earlier browser UI remain compatib
 Saved conversations from a different provider/model can be viewed, but start a
 new chat to send with the currently configured model.
 
-Replies arrive in full rather than streaming. Conversation size and successful
+Ollama chat replies stream live. Other provider adapters currently return complete replies. Conversation size and successful
 turns use `max_prompt_bytes` and `max_turns`; start a new chat when those limits
 are reached. Exiting while a reply or coding action is active waits for it to
 finish or pause and save. Actions run in the background while the terminal stays
@@ -384,3 +391,24 @@ Each new HTTP call records its provider, model, and full request endpoint in its
 input audit and start event, including failed calls. API keys and authorization
 headers are excluded. Non-HTTP adapters without identity metadata are explicitly
 labelled as using the run's declared configuration.
+
+### Editing and continuing chat
+
+Use `/requests` then `/select NUMBER` to choose a bundle. `/edit-request` loads its
+fields; `/edit description New description` changes one field without restarting.
+`/save-request` persists changes after checking for concurrent edits. Editing the
+title keeps the existing folder; additional Markdown sections are preserved.
+
+`/context` reports the current request, included document paths and sizes,
+exclusion rules, and prompt usage in bytes (not estimated model tokens).
+`/continue` creates a new linked conversation with an abridged extractive handoff
+of the last four user messages and preserved request/run/draft references. It
+makes no model call and does not transfer a reviewed-plan approval. The original
+conversation stays available; the handoff is not a complete semantic summary.
+The same documents still apply, so continuation only reduces conversation history.
+
+Plans request separate affected-file, step, verification, and risk sections.
+Review labels distinguish proposed work from actual saved diffs shown after coding.
+Approval remains explicit. Ctrl+X stops at a safe boundary; an active network read
+may finish or time out first. Partial replies are stored in the call audit and
+remain retryable/discardable, never treated as completed answers or tool actions.

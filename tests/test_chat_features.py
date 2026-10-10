@@ -80,7 +80,7 @@ class ChatFeatureTests(unittest.TestCase):
         class StreamProvider:
             def stream(self, system, messages):
                 yield 'First'
-                yield 'Second'
+                raise AssertionError('Cancelled stream must not request another chunk')
         self.service.provider = StreamProvider()
         chunks = []
         def receive(text):
