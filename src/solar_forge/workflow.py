@@ -8,6 +8,7 @@ from typing import Callable
 from .audit import Audit
 from .context import collect
 from .domain import Config, ForgeError, Request
+from .requests import read_request
 from .providers import Provider
 from .workspace import Workspace
 
@@ -99,8 +100,8 @@ def discover(audit: Audit, provider: Provider, max_prompt_bytes: int = 500000) -
 
 def prepare(workspace: Workspace, config: Config, request_path: str, provider: Provider,
             *, on_created: Callable[[Audit], None] | None = None) -> Audit:
-    request = Request.parse(workspace.read(request_path))
-    context = collect(workspace, config)
+    request = Request.parse(read_request(workspace, request_path))
+    context = collect(workspace, config, request_path)
     audit = Audit.create(workspace, request)
     audit.write("context.json", json.dumps(context, indent=2, ensure_ascii=False))
     audit.write("context.md", '# Context snapshot\n\n' + '\n\n'.join(
@@ -134,9 +135,9 @@ def record_answer(audit: Audit, question_id: str, answer: str) -> None:
 
 def assert_current(workspace: Workspace, config: Config, audit: Audit) -> None:
     state = audit.load()
-    if workspace.read(state["request_path"]) != audit.read("request.md"):
+    if read_request(workspace, state["request_path"]) != audit.read("request.md"):
         raise ForgeError("Request changed since discovery. Prepare a new run.")
-    current = collect(workspace, config)
+    current = collect(workspace, config, state["request_path"])
     previous = json.loads((audit.path / "context.json").read_text())
     if current["documents"] != previous["documents"] or current["skipped"] != previous["skipped"]:
         raise ForgeError("Project guidance changed since discovery. Prepare a new run.")

@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from solar_forge.requests import DEFAULT_REQUEST, read_request, write_request
 from solar_forge.agent import approve, digest, run
 from solar_forge.domain import Config, ForgeError
 from solar_forge.workflow import plan, prepare, record_answer
@@ -14,10 +15,10 @@ from test_workflow import QUESTION, ScriptedProvider
 class AgentTests(unittest.TestCase):
     def setup_run(self, tmp, *actions, max_turns=30):
         ws = Workspace(Path(tmp))
-        ws.write('request.md', REQUEST)
+        write_request(ws, DEFAULT_REQUEST, REQUEST)
         cfg = Config(model='test', max_turns=max_turns)
         provider = ScriptedProvider({'questions': []}, {'plan': '# Plan\nCreate export.'}, *actions)
-        audit = prepare(ws, cfg, 'request.md', provider)
+        audit = prepare(ws, cfg, DEFAULT_REQUEST, provider)
         plan(ws, cfg, audit, provider)
         return ws, cfg, audit, provider
 
@@ -75,7 +76,7 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(audit.load()['status'], 'interrupted')
             run(ws, cfg, audit, ScriptedProvider({'tool': 'delete', 'path': 'request.md'}))
             self.assertEqual(audit.load()['status'], 'turn_limit')
-            self.assertEqual(ws.read('request.md'), REQUEST)
+            self.assertEqual(read_request(ws, DEFAULT_REQUEST), REQUEST)
 
     def test_plan_tamper_and_policy_edit_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -89,7 +90,7 @@ class AgentTests(unittest.TestCase):
             # Only an explicit new approval authorizes the new plan.
             approve(audit)
             run(ws, cfg, audit, provider)
-            self.assertEqual(ws.read('request.md'), REQUEST)
+            self.assertEqual(read_request(ws, DEFAULT_REQUEST), REQUEST)
 
     def test_pending_write_recovery(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -111,7 +112,7 @@ class AgentTests(unittest.TestCase):
     def test_files_inside_context_folders_cannot_be_changed(self):
         with tempfile.TemporaryDirectory() as tmp:
             ws = Workspace(Path(tmp))
-            ws.write('request.md', REQUEST)
+            write_request(ws, DEFAULT_REQUEST, REQUEST)
             ws.write('docs/rules.md', 'Original rules')
             cfg = Config(model='test', docs=['docs'])
             provider = ScriptedProvider({'questions': []}, {'plan': '# Plan\nFollow the rules.'},
@@ -119,7 +120,7 @@ class AgentTests(unittest.TestCase):
                 {'tool': 'write_file', 'path': 'docs/rules.md', 'content': 'Changed rules'},
                 {'tool': 'write_file', 'path': 'docs/new.md', 'content': 'New rules'},
                 {'tool': 'finish', 'summary': 'No policy changes.', 'verification': 'Inspect docs.'})
-            audit = prepare(ws, cfg, 'request.md', provider)
+            audit = prepare(ws, cfg, DEFAULT_REQUEST, provider)
             plan(ws, cfg, audit, provider)
             approve(audit)
             run(ws, cfg, audit, provider)

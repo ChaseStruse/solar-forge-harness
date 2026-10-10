@@ -1,6 +1,7 @@
 """Audited, provider-independent conversation service."""
 import json
 
+from .requests import current_request, request_path, read_request
 from .audit import Audit, now
 from .chat_workflow import ChatWorkflow, HELP, input_mode, workflow_hint
 from .context import collect
@@ -39,8 +40,7 @@ class ChatService:
 
     def new(self) -> dict:
         context = collect(self.workspace, self.config)
-        path = self.workspace.path('request.md')
-        context['project_request'] = self.workspace.read('request.md') if path.exists() else None
+        context['project_request'] = None
         request = Request.parse('# Request: Forge chat\n\n## Description\n'
                                 'Discuss the current project with the configured model.\n\n'
                                 '## Technical Details\nConversation and explicit request workflow actions with project guidance.\n\n'
@@ -103,9 +103,14 @@ class ChatService:
             messages = [*state['messages'], {'role': 'user', 'content': state['pending_message']}]
             try:
                 # Requests and coding state may change while the conversation stays open.
-                context = collect(self.workspace, self.config)
-                path = self.workspace.path('request.md')
-                context['project_request'] = self.workspace.read('request.md') if path.exists() else None
+                name = state.get('request_path')
+                if not name:
+                    try:
+                        name = current_request(self.workspace)
+                    except ForgeError:
+                        name = None
+                context = collect(self.workspace, self.config, name)
+                context['project_request'] = read_request(self.workspace, name) if name and request_path(self.workspace, name).exists() else None
                 context['workflow'] = ChatWorkflow(self.workspace, self.config, self.provider, audit, state).context()
                 audit.write('context.json', json.dumps(context, indent=2, ensure_ascii=False))
                 response = call(audit, self.provider, CHAT_SYSTEM + '\nChat commands:\n' + HELP + '\nProject context:\n' +

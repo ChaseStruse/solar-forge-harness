@@ -53,8 +53,8 @@ class Workspace:
             raise ForgeError("Path escapes the project.")
         return path
 
-    def read(self, relative: str) -> str:
-        path = self.path(relative)
+    def read(self, relative: str, *, internal: bool = False) -> str:
+        path = self.path(relative, internal=internal)
         if not path.is_file():
             raise ForgeError(f"Not a file: {relative}")
         if path.stat().st_size > self.max_file_bytes:

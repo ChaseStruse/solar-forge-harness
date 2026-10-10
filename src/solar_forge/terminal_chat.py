@@ -169,7 +169,7 @@ class TerminalChat:
             text = ('What are we building?\n\n'
                     'Ask your model for help, or use these actions:\n\n'
                     '  /request   Write a request, one question at a time\n'
-                    '  /prepare   Find questions in request.md\n'
+                    '  /prepare   Find questions in the selected request\n'
                     '  /answer    Record answers (use /ask for model advice)\n'
                     '  /plan      Create and review a coding plan\n'
                     '  /approve   Approve this plan and start coding\n'

@@ -10,6 +10,7 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 from prompt_toolkit.data_structures import Size
 
+from solar_forge.requests import DEFAULT_REQUEST, read_request, write_request
 from solar_forge.chat import ChatService
 from solar_forge.audit import Audit
 from solar_forge.domain import Config, ForgeError
@@ -30,7 +31,7 @@ class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
             root = Path(tmp)
             workspace = Workspace(root)
-            workspace.write('request.md', REQUEST)
+            write_request(workspace, DEFAULT_REQUEST, REQUEST)
             provider = TextProvider(json.dumps(QUESTION), 'Choose UTC.',
                                     json.dumps({'plan': '# Plan\nCreate export.py.'}),
                                     json.dumps({'tool': 'write_file', 'path': 'export.py', 'content': 'TIMEZONE = "UTC"\n'}),
@@ -78,13 +79,13 @@ class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
             for message in ('Build a calculator.', 'Please help me work out the details.', 'Addition works', '/save-request'):
                 ui.composer.text = message
                 await ui.send()
-            self.assertIn('# Request: Calculator', (root / 'request.md').read_text())
+            self.assertIn('# Request: Calculator', (root / 'agentic_audit/requests/calculator/request.md').read_text())
             self.assertIsNone(ui.current['input_mode'])
 
     async def test_keyboard_workflow_commands_require_explicit_approval(self):
         with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
             workspace = Workspace(Path(tmp))
-            workspace.write('request.md', REQUEST)
+            write_request(workspace, DEFAULT_REQUEST, REQUEST)
             provider = TextProvider(json.dumps({'questions': []}), json.dumps({'plan': '# Plan\nInspect the project.'}),
                                     json.dumps({'tool': 'finish', 'summary': 'Ready for review.', 'verification': 'Inspect manually.'}))
             ui = TerminalChat(ChatService(workspace, Config(model='test'), provider), input=pipe, output=WideOutput())

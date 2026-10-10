@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from solar_forge.requests import DEFAULT_REQUEST, read_request, write_request
 from solar_forge.chat import ChatService
 from solar_forge.cli import main
 from solar_forge.domain import Config, CONFIG_TEMPLATE, ForgeError
@@ -29,7 +30,7 @@ class ChatServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ws = Workspace(Path(tmp))
             ws.write('README.md', 'Use UTC for invoice dates.')
-            ws.write('request.md', 'Draft request under discussion.')
+            write_request(ws, DEFAULT_REQUEST, 'Draft request under discussion.')
             provider = TextProvider('Hello!', 'Use UTC.')
             service = ChatService(ws, Config(model='test-model'), provider)
             session = service.new()

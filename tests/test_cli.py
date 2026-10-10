@@ -7,6 +7,7 @@ import tempfile
 from threading import Thread
 import unittest
 
+from solar_forge.requests import DEFAULT_REQUEST, read_request, write_request
 from solar_forge.cli import main
 from solar_forge.domain import CONFIG_TEMPLATE
 from test_foundation import REQUEST
@@ -49,10 +50,10 @@ class CLITests(unittest.TestCase):
             try:
                 root = Path(tmp)
                 self.invoke(root, 'init')
-                (root / 'request.md').write_bytes(REQUEST.replace('\n', '\r\n').encode())
+                (root / DEFAULT_REQUEST).write_bytes(REQUEST.replace('\n', '\r\n').encode())
                 # Repeat init preserves the user's request and configuration.
                 self.invoke(root, 'init')
-                self.assertEqual((root / 'request.md').read_bytes(), REQUEST.replace('\n', '\r\n').encode())
+                self.assertEqual((root / DEFAULT_REQUEST).read_bytes(), REQUEST.replace('\n', '\r\n').encode())
                 port = server.server_address[1]
                 config = CONFIG_TEMPLATE.replace('"CHANGE_ME"', '"test-model"').replace(
                     '# base_url = "http://localhost:11434"', f'base_url = "http://127.0.0.1:{port}"')
@@ -74,8 +75,8 @@ class CLITests(unittest.TestCase):
     def test_request_creation_and_missing_config_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            self.invoke(root, 'request', 'Export billing', '--output', 'requests/export.md')
-            self.assertIn('# Request: Export billing', (root / 'requests/export.md').read_text())
+            self.invoke(root, 'request', 'Export billing', '--output', 'agentic_audit/requests/export/request.md')
+            self.assertIn('# Request: Export billing', (root / 'agentic_audit/requests/export/request.md').read_text())
             with redirect_stderr(StringIO()) as err:
                 code = main(['--project', str(root), 'prepare'])
             self.assertEqual(code, 1)

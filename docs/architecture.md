@@ -64,8 +64,8 @@ New questions, interrupted execution, and run reopening retain the existing
 workflow state machine and approval rules. `/changes` displays saved diffs.
 
 Conversation and request limits remain enforced by ChatService and the provider
-adapters. See the [terminal chat implementation plan](terminal-chat-implementation-plan.md).
-The earlier [browser plan](chat-implementation-plan.md) is retained as design history.
+adapters. See the [terminal chat implementation plan](../agentic_audit/requests/terminal-chat/implementation-plan.md).
+The earlier [browser plan](../agentic_audit/requests/chat/implementation-plan.md) is retained as design history.
 
 ## State transitions
 

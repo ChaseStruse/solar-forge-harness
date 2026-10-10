@@ -57,7 +57,7 @@ def write_file(workspace: Workspace, config: Config, audit: Audit, state: dict, 
     assert_current(workspace, config, audit)
     relative, content = action['path'], action['content']
     target = workspace.path(relative, write=True)
-    protected = {workspace.path(p) for p in config.docs} | {workspace.path(state['request_path'])}
+    protected = {workspace.path(p) for p in config.docs} | {workspace.path(state['request_path'], internal=True)}
     if any(target == path or (path.is_dir() and target.is_relative_to(path)) for path in protected):
         raise ForgeError('Request and context documentation cannot be edited during this run.')
     if len(content.encode()) > workspace.max_file_bytes:

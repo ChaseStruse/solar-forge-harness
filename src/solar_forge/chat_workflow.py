@@ -6,15 +6,16 @@ import shlex
 from .agent import approve, run
 from .audit import Audit
 from .domain import Config, ForgeError, Request
+from .requests import current_request, request_name, request_path, read_request, write_request
 from .providers import Provider
 from .workflow import assert_current, discover, plan, plan_digest, prepare, record_answer
 from .workspace import Workspace
 
 HELP = '''Work on a request here in chat:
   /request           Create a request, one question at a time
-  /request show      Read request.md
+  /request show      Read the selected request
   /save-request      Save the request you have drafted
-  /prepare [FILE]    Read the request and find questions (default: request.md)
+  /prepare [FILE]    Read the request and find questions (selected request, or the only request bundle)
   /answer            Answer the next question, one at a time
   /answer Q1 TEXT    Save a specific answer
   /plan              Create and display the coding plan
@@ -101,6 +102,7 @@ class ChatWorkflow:
                 self.state.pop('reviewed_plan', None)
                 self.state.pop('answering', None)
             self.state['workflow_run'] = relative
+            self.state['request_path'] = audit.load()['request_path']
             return audit
         if not self.state.get('workflow_run'):
             raise ForgeError('Choose a run with /runs and /use NUMBER, or start one with /prepare.')
@@ -171,9 +173,7 @@ class ChatWorkflow:
             raise ForgeError('A request draft is already open. Continue it, /save-request, or /cancel first.')
         self.state.pop('answering', None)
         self.state.pop('reviewed_plan', None)
-        path = self.workspace.path('request.md', write=True)
-        before = self.workspace.read('request.md') if path.exists() else None
-        self.state['request_draft'] = {'stage': 'title', 'before_sha256': file_hash(before), 'fields': {}}
+        self.state['request_draft'] = {'stage': 'title', 'fields': {}}
         if title:
             return self.respond(title)
         return 'Let’s write your request. Nothing is saved until you enter /save-request.\n\nWhat is the title?\nUse /ask for advice at any step, or /cancel to stop.'
@@ -190,6 +190,11 @@ class ChatWorkflow:
                 raise ForgeError('Your draft is ready. Use /save-request to save it, /ask for advice, or /cancel.')
             if stage == 'title' and ('\n' in message or '\r' in message or message.strip() == 'Your request title'):
                 raise ForgeError('Give your request a title on one line.')
+            if stage == 'title':
+                name = request_name(message.strip())
+                path = request_path(self.workspace, name)
+                draft['path'] = name
+                draft['before_sha256'] = file_hash(read_request(self.workspace, name) if path.exists() else None)
             stages = ('title', 'description', 'technical_details', 'acceptance_criteria', 'review')
             draft['fields'][stage] = message.strip()
             draft['stage'] = stages[stages.index(stage) + 1]
@@ -202,7 +207,7 @@ class ChatWorkflow:
                 return prompts[draft['stage']] + '\n\nYour reply is saved in the draft. Use /ask for advice instead.'
             draft['markdown'] = self.request_markdown(draft['fields'])
             Request.parse(draft['markdown'])
-            return (draft['markdown'] + '\nReview your request above. /save-request writes it to request.md'
+            return (draft['markdown'] + f"\nReview your request above. /save-request writes it to {draft['path']}"
                     + (' and replaces the existing file.' if draft['before_sha256'] is not None else '.')
                     + '\nUse /ask for advice, or /cancel to discard this draft.')
         if self.state.get('answering'):
@@ -220,22 +225,25 @@ class ChatWorkflow:
         draft = self.state.get('request_draft')
         if not draft or draft['stage'] != 'review':
             raise ForgeError('Finish drafting with /request before saving.')
-        path = self.workspace.path('request.md', write=True)
-        current = self.workspace.read('request.md') if path.exists() else None
+        name = draft['path']
+        path = request_path(self.workspace, name)
+        current = read_request(self.workspace, name) if path.exists() else None
         if file_hash(current) != draft['before_sha256']:
             raise ForgeError('request.md changed while you were drafting. Your draft is kept; /cancel and start again to avoid replacing someone else’s edits.')
-        self.workspace.write('request.md', draft['markdown'])
+        write_request(self.workspace, name, draft['markdown'])
+        self.state['request_path'] = name
         self.state.pop('request_draft', None)
         self.state.pop('workflow_run', None)
         self.state.pop('reviewed_plan', None)
         self.state.pop('answering', None)
-        return 'Saved request.md. Use /prepare to find any questions before coding, or ask your model for help.'
+        return f'Saved {name}. Use /prepare to find any questions before coding, or ask your model for help.'
 
     def prepare_request(self, value: str) -> str:
-        words = shlex.split(value) if value else ['request.md']
+        words = shlex.split(value) if value else [current_request(self.workspace, self.state.get('request_path'))]
         if len(words) != 1:
             raise ForgeError('Use /prepare FILE. Put paths with spaces in quotes.')
         def created(audit):
+            self.state['request_path'] = audit.load()['request_path']
             self.state['workflow_run'] = audit.path.relative_to(self.workspace.root).as_posix()
             self.state.pop('reviewed_plan', None)
             self.state.pop('answering', None)
@@ -310,7 +318,7 @@ class ChatWorkflow:
             return 'Prompt closed. Existing files and saved progress are kept. No new coding was started. Use /status for progress.'
         if command == '/request':
             if value == 'show':
-                return self.workspace.read('request.md')
+                return read_request(self.workspace, current_request(self.workspace, self.state.get('request_path')))
             return self.start_request(value)
         if command == '/save-request':
             if value:

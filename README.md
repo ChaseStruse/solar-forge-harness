@@ -38,6 +38,27 @@ from this checkout without installing:
 PYTHONPATH=src python -m solar_forge --help
 ```
 
+## Mandatory request location
+
+Every request must live at `agentic_audit/requests/<request-name>/request.md`.
+Root-level requests and requests under `docs/` or a separate `requests/` directory
+are rejected. Use lowercase letters, digits, and hyphens for request folder names.
+`forge request "Export billing invoices"` creates a folder named `export-billing-invoices`.
+Setup creates a starter bundle named `default`; chat drafts use the request title.
+When several bundles exist, pass the desired path to `forge prepare` or `/prepare`.
+Chat remembers the request saved or prepared in that conversation.
+
+Put supporting files and subfolders beside `request.md`. Markdown, UTF-8 text,
+and reStructuredText documents are automatically included within the configured
+file and context limits. Other file types may be stored there but are not sent
+to the model. Secret paths, symlinks, and excluded directories are not collected.
+Changes to supporting text documents require a new preparation before coding.
+
+All request-specific plans, model call records, change snapshots, and audits must
+stay under `agentic_audit/`. Application source edits still go to their normal
+project paths. Existing external requests must be moved into a bundle before
+preparing or resuming coding; historical audit snapshots remain unchanged.
+
 ## Start a request
 
 Run inside the project you want the agent to work on:
@@ -60,7 +81,7 @@ Forge walks you through three steps:
    and creates the local folder if selected. Document search and indexing are
    not implemented yet.
 
-Setup creates `request.md`, `.forge/config.toml`, and editable guidance in
+Setup creates `agentic_audit/requests/default/request.md`, `.forge/config.toml`, and editable guidance in
 `.forge/standards/`. It ends with a list of created or preserved files, your
 selected settings, and instructions for your first chat. Existing files are
 preserved; running `forge init` again keeps your configuration and restores
@@ -76,7 +97,7 @@ title, description, details, and results you want. Use `/ask` followed by a
 question whenever you need model advice. Type `/save-request` to save the draft,
 then `/prepare`, `/answer` if questions are needed, and `/plan`. Read the plan
 and type `/approve` when you are ready for coding. Press Enter to send and
-Ctrl-Q to leave chat. You can also edit `request.md` directly.
+Ctrl-Q to leave chat. You can also edit the request bundle’s `request.md` directly.
 
 Customize the project guidance and replace the request template, for example:
 
@@ -97,7 +118,7 @@ Record any unresolved business rules as questions before coding.
 ```
 
 For multiple requests, use `forge request "Export billing invoices" --output
-requests/billing.md`. Add domain documents and application standards to the
+agentic_audit/requests/billing/request.md`. Add domain documents and application standards to the
 `harness.docs` list in `.forge/config.toml`. Entries can be individual files or
 folders. Folders load `.md`, `.txt`, and `.rst` files, including subfolders, in a
 stable order. Known credential paths, symlinks, build folders, and dependencies
@@ -180,10 +201,10 @@ You can complete the request workflow in this window:
 
 | Chat command | What it does |
 | --- | --- |
-| `/request [TITLE]` | Draft `request.md`, one question at a time |
+| `/request [TITLE]` | Draft a request bundle, one question at a time |
 | `/request show` | Read the current request |
-| `/save-request` | Save the finished draft; explicitly replaces an existing `request.md` |
-| `/prepare [FILE]` | Find questions in a request (default: `request.md`) |
+| `/save-request` | Save the finished draft; saves to the title’s request folder, with an explicit replacement notice if it exists |
+| `/prepare [FILE]` | Find questions in a request (selected request in chat, otherwise the only request bundle) |
 | `/answer` | Record answers one at a time |
 | `/answer Q1 TEXT` | Record a specific answer |
 | `/plan` | Create and display the coding plan |
@@ -217,7 +238,7 @@ pause coding and require answers, a revised plan, and a fresh approval. Failed
 preparation can be retried with `/discover`; interrupted coding can be reviewed
 with `/run` and resumed with `/approve`.
 
-Chat sends the current project documentation, `request.md` if present, and the
+Chat sends the current project documentation, the selected request and its supporting text documents, and the
 selected run’s questions, plan, and summary to the model when you ask for help.
 It shares the existing provider adapters, so cloud providers require the same
 API-key environment variables. Coding runs retain their own audit records and
@@ -243,7 +264,7 @@ and output. The former `--no-browser` and `--port` options have been removed.
 ## Workflow
 
 ```sh
-forge prepare request.md
+forge prepare agentic_audit/requests/default/request.md
 forge status
 ```
 
@@ -288,6 +309,10 @@ Use `forge --project /path/to/project COMMAND` when working outside the project.
 
 ```text
 agentic_audit/
+  requests/
+    <request-name>/
+      request.md             # Mandatory request entry point
+      context/               # Optional supporting files and subfolders
   export-billing-invoices/
     <UTC-timestamp>-<unique-id>/
       request.md             # Original request
@@ -329,7 +354,7 @@ review your audit retention policy. API keys are not written by the adapter.
 
 Streaming, cost accounting, retrieval, OS-isolated verification, Git/deployment
 actions, and optional multi-agent coordination are follow-up work. See the
-[implementation plan](docs/implementation-plan.md) and
+[implementation plan](agentic_audit/requests/baseline/implementation-plan.md) and
 [architecture](docs/architecture.md).
 
 ## Development
