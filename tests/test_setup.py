@@ -167,3 +167,21 @@ class SetupTests(unittest.TestCase):
                 (root / 'docs' / f'{i:03}.md').write_text('Small document')
             with self.assertRaisesRegex(ForgeError, '500 documentation files'):
                 collect(Workspace(root), Config(docs=['docs']))
+
+    def test_init_creates_logs_folder_and_preserves_existing_exports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            code, _, err, _ = self.invoke(root, (), '--no-interactive')
+            self.assertEqual(code, 0, err)
+            logs = root / '.forge/logs'
+            self.assertTrue(logs.is_dir())
+            exported = logs / 'existing.md'
+            exported.write_text('Saved diagnostics')
+            code, _, err, _ = self.invoke(root, (), '--no-interactive')
+            self.assertEqual(code, 0, err)
+            self.assertEqual(exported.read_text(), 'Saved diagnostics')
+            exported.unlink()
+            logs.rmdir()
+            code, _, err, _ = self.invoke(root, (), '--no-interactive')
+            self.assertEqual(code, 0, err)
+            self.assertTrue(logs.is_dir())

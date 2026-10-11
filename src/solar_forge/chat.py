@@ -11,7 +11,7 @@ from .retrieval import automatic_search, record_search, format_result
 from .domain import Config, ForgeError, Request
 from .providers import Provider, assert_identity, configured_identity
 from .workflow import call
-from .workspace import Workspace
+from .workspace import Workspace, atomic_write
 from .personality import PERSONALITY
 from .progress import read_progress
 
@@ -335,9 +335,12 @@ class ChatService:
                     if path.is_file() and path.name.endswith(('-usage.json', '-output.txt', '-partial.txt')):
                         lines.extend(['', '### calls/' + path.name, '', source.read('calls/' + path.name)])
             name = 'session-logs-' + uuid.uuid4().hex[:10] + '.md'
-            audit.write(name, '\n'.join(lines) + '\n')
-            relative = (audit.path / name).relative_to(self.workspace.root).as_posix()
-            result = 'Session logs exported to ' + relative + '\n\n' + '\n'.join(lines)
+            content = '\n'.join(lines) + '\n'
+            relative = '.forge/logs/' + audit.path.name + '-' + name
+            export = self.workspace.path(relative, write=True, internal=True)
+            atomic_write(export, content)
+            audit.write(name, content)
+            result = 'Session logs exported to ' + relative + '\nOpen file: ' + str(export)
             state['messages'].extend([{'role': 'user', 'content': '/logs'},
                                       {'role': 'assistant', 'content': 'Forge workflow\nSession logs exported to ' + relative}])
             state['updated_at'] = now()

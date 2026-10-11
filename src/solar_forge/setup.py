@@ -187,6 +187,9 @@ def initialize(workspace: Workspace, *, interactive: bool, languages: list[str] 
     # Gather choices before writing so cancelling a prompt leaves no setup files.
     print('\nSetup files:')
     create(workspace, '.forge/config.toml', render_config(config), internal=True)
+    logs = workspace.path('.forge/logs', write=True, internal=True)
+    logs.mkdir(parents=True, exist_ok=True)
+    print('Logs folder: .forge/logs/')
     created_config = not existing
     if created_config:
         docs_folder = config.docs[-1]

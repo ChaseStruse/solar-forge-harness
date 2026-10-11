@@ -271,7 +271,7 @@ You can complete the request workflow in this window:
 | `/select NUMBER` | Select a bundle from `/requests` |
 | `/edit-request` | Open the selected request for editing |
 | `/edit FIELD TEXT` | Update `title`, `description`, `technical_details`, or `acceptance_criteria` in a draft |
-| `/logs` | Display and export current chat diagnostics and linked coding run events/responses to a Markdown file in the chat audit folder; works after failed replies, without a model call |
+| `/logs` | Export current chat diagnostics and linked coding run events/responses to a Markdown file in `.forge/logs`, with a retained audit copy; works after failed replies, without a model call |
 | `/context` | Inspect included documents, retrieval, exclusions, and prompt bytes; warns at 80% of the limit |
 | `/index` | Build or refresh the local reference library |
 | `/search QUERY` | Search reference passages with source citations, without a model call |
@@ -644,6 +644,6 @@ If a local model times out during `/prepare`, increase `timeout` under `[provide
 in `.forge/config.toml`, for example `timeout = 600`, and restart Forge before
 retrying `/discover`. Non-streaming preparation waits for the final answer; a
 reasoning model may spend the full timeout thinking. Reducing reasoning in the
-model server can also help. `/logs` exports session evidence for troubleshooting
+model server can also help. `forge init` creates `.forge/logs`. `/logs` exports session evidence there for troubleshooting
 (including conversation text, so review it before sharing). It does not collect
 LM Studio server logs or API credentials.
