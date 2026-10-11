@@ -391,6 +391,11 @@ class ChatWorkflow:
         if self.cancelled and self.cancelled():
             raise ForgeError('Stopped by user. Progress is saved; /next resumes.')
         status = audit.load()['status']
+        if status in {'discovering', 'ready_to_plan'}:
+            try:
+                assert_current(self.workspace, self.config, audit)
+            except ForgeError as exc:
+                raise ForgeError(str(exc) + ' Use /start "' + audit.load()['request_path'] + '" for fresh preparation.') from exc
         if status == 'discovering':
             with audit.lock():
                 discover(audit, self.provider, self.config.max_prompt_bytes)
@@ -480,6 +485,8 @@ class ChatWorkflow:
             self.chat.save(self.state)
             run(self.workspace, self.config, audit, self.provider, cancelled=self.cancelled)
         result = self.status(audit)
+        if self.state.get('guided_workflow'):
+            result = '3/3 · Development results\n\n' + result
         if audit.load()['status'] == 'review_required':
             result += '\n\nACTUAL SAVED CHANGES\n' + self.changes('')
         return result

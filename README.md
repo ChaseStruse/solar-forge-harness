@@ -149,8 +149,10 @@ existing coding runs.
 To start, run `forge chat` and type `/request`. Forge guides you through the
 title, description, details, and results you want. Use `/ask` followed by a
 question whenever you need model advice. Type `/save-request` to save the draft,
-then `/prepare`, `/answer` if questions are needed, and `/plan`. Read the plan
-and type `/approve` when you are ready for coding. Press Enter to send and
+then `/start`. Forge prepares the request, asks any blocking questions one at a
+time, and creates the plan automatically. Answer questions directly; use `/ask`
+for advice. Read the plan and type `/approve` when ready for development.
+Use `/next` to continue or retry the saved step without starting another run. Press Enter to send and
 Ctrl-Q to leave chat. You can also edit the request bundle’s `request.md` directly.
 
 Customize the project guidance and replace the request template, for example:
@@ -286,6 +288,7 @@ You can complete the request workflow in this window:
 | `/request [TITLE]` | Draft a request bundle, one question at a time |
 | `/request show` | Read the current request |
 | `/save-request` | Save the finished draft; saves to the title’s request folder, with an explicit replacement notice if it exists |
+| `/start [FILE]` | Prepare, resolve blocking questions, and build/review the plan; an explicit request path starts a fresh run |
 | `/prepare [FILE]` | Find questions in a request (selected request in chat, otherwise the only request bundle) |
 | `/answer` | Record answers one at a time |
 | `/answer Q1 TEXT` | Record a specific answer |
@@ -296,7 +299,7 @@ You can complete the request workflow in this window:
 | `/changes [FILE]` | Review saved file diffs |
 | `/runs`, then `/use NUMBER` | Continue an existing coding run, including one started with the CLI |
 | `/discover` | Retry failed preparation for the selected run |
-| `/next` | Take the next available step; coding still requires `/approve` |
+| `/next` | Continue or retry the continuous workflow until an answer or plan review is needed; coding still requires `/approve` |
 | `/ask TEXT` | Ask your model for advice at any step |
 | `/discard-pending` | Discard a failed model message; return it to the composer for editing and continue the same chat |
 | `/cancel` | Leave request drafting, question answering, or plan review |
@@ -304,7 +307,7 @@ You can complete the request workflow in this window:
 
 In Forge chat, `/plan`, `/run`, `/discover`, `/answer`, `/changes`, and `/approve`
 open a request picker when no run is selected. `/prepare`, `/edit-request`,
-`/request show`, and `/next` also open it when the request is ambiguous. Use
+`/request show`, `/start`, and `/next` also open it when the request is ambiguous. Use
 **Up/Down** to choose a request, **Enter** to confirm, or **Escape** to cancel.
 Each entry shows the request title and latest run status. Selecting a request
 resumes its latest coding run and continues your command. If it has no run yet,
@@ -704,3 +707,15 @@ and next action. A usage strip shows the latest recorded prompt byte size agains
 the current budget and reported input/output token totals for the chat and selected
 run. Bytes are the harness's prompt representation, not tokenizer counts; providers
 that omit usage are shown as unavailable. Unreported tokens are not estimated.
+
+The primary Forge chat workflow is **`/start` → answer any blocking questions →
+review the plan → `/approve`**. Preparation includes discovery; it is not a
+separate user step. If there are no questions, Forge creates the plan in the same
+action. The final answer triggers planning automatically. Progress and provider
+calls remain visible throughout. `/next` resumes or retries the current saved
+stage and stops for human input or review; it never approves development.
+
+`/start` resumes the selected run. `/start agentic_audit/requests/NAME/request.md`
+starts fresh preparation explicitly, for example after editing a request or project
+guidance. Finished runs show their saved results. `/prepare`, `/discover`, `/answer`,
+`/plan`, and `/run` remain available as advanced individual-stage controls.

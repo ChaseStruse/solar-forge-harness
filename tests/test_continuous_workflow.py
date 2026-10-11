@@ -80,3 +80,12 @@ class ContinuousWorkflowTests(unittest.TestCase):
         resumed = service.command(session, '/next')
         self.assertIsNone(resumed['command_error'])
         self.assertEqual(run.load()['status'], 'planned')
+
+    def test_changed_request_does_not_trigger_model_calls_on_resume(self):
+        service, session = self.service(ForgeError('Provider timed out'))
+        failed = service.command(session, '/start')
+        write_request(self.ws, DEFAULT_REQUEST, REQUEST + '\nChanged details.\n')
+        result = service.command(session, '/next')
+        self.assertIn('/start "', result['command_error'])
+        self.assertEqual(len(service.provider.calls), 1)
+        self.assertEqual(result['workflow_run'], failed['workflow_run'])

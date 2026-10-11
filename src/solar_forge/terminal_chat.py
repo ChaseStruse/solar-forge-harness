@@ -461,7 +461,7 @@ class TerminalChat:
         elif self.current and self.current.get('run_status') == 'discovering':
             choices.append({'label': 'Continue preparation', 'command': '/next'})
         elif self.current and self.current.get('run_status') == 'ready_to_plan':
-            choices.append({'label': 'Retry /plan', 'command': '/plan'})
+            choices.append({'label': 'Continue planning', 'command': '/next'})
         elif self.current and self.current.get('run_status') in {'planned', 'interrupted', 'executing', 'turn_limit'}:
             choices.append({'label': 'Review plan before resuming', 'command': '/run'})
         choices.extend([{'label': 'Adjust timeout', 'edit': '/settings timeout '},
