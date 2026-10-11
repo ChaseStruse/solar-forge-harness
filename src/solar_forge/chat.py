@@ -69,14 +69,17 @@ class ChatService:
         audit = self._open(session)
         state = audit.load()
         run_progress = None
+        run_state = None
         if state.get('workflow_run'):
             try:
-                run_progress = read_progress(Audit.open(self.workspace, state['workflow_run']))
+                selected = Audit.open(self.workspace, state['workflow_run'])
+                run_state = selected.load()
+                run_progress = read_progress(selected)
             except (ForgeError, OSError):
                 pass
         return {key: state.get(key) for key in ('title', 'provider', 'model', 'messages',
                                                'pending_message', 'created_at', 'updated_at', 'workflow_run', 'request_path', 'reviewed_plan')} | {
-            'run_status': (Audit.open(self.workspace, state['workflow_run']).load()['status'] if run_progress else None),
+            'run_status': run_state.get('status') if run_state else None,
             'progress': read_progress(audit), 'run_progress': run_progress,
             'id': audit.path.relative_to(self.workspace.root).as_posix(),
             'busy': (audit.path / '.lock').exists(), 'input_mode': input_mode(state),
@@ -284,16 +287,29 @@ class ChatService:
             event_path = self._open(entry['id']).path / 'events.jsonl'
             if event_path.is_file():
                 for line in event_path.read_text().splitlines():
-                    event = json.loads(line)
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
                     if isinstance(event.get('error'), str):
                         text += '\n' + event['error']
             haystack = entry['title'] + '\n' + (chat.get('request_path') or '') + '\n' + text
             if query.casefold() in haystack.casefold():
                 match = next((line for line in text.splitlines() if query and query.casefold() in line.casefold()), '')
-                results.append(entry | {'snippet': match[:160]})
+                results.append(entry | {'snippet': match[:160], 'kind': 'chat'})
             if len(results) >= 50:
                 break
-        return results
+        workflow = ChatWorkflow(self.workspace, self.config, self.provider, None, {})
+        for choice in workflow.request_options():
+            text = read_request(self.workspace, choice['path'])
+            if query.casefold() in (choice['title'] + '\n' + choice['path'] + '\n' + text).casefold():
+                results.append({'kind': 'request', 'title': choice['title'], 'request': choice['path'],
+                                'snippet': choice['status']})
+            if len(results) >= 50:
+                break
+        return results[:50]
 
     def request_options(self, message: str, session: str | None = None) -> list[dict] | None:
         """Return picker choices only when an implicit request/run is missing."""

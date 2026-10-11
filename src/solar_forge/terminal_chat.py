@@ -292,6 +292,7 @@ class TerminalChat:
         self.close_request_picker()
         self.close_actions()
         self.plan_visible = False
+        self.last_failed_command = None
         try:
             self.current = self.service.get(session)
             self.live_events = []
@@ -311,6 +312,7 @@ class TerminalChat:
         self.close_request_picker()
         self.close_actions()
         self.plan_visible = False
+        self.last_failed_command = None
         self.current = None
         self.live_events = []
         self.activity = None
@@ -387,7 +389,8 @@ class TerminalChat:
 
     def usage_indicator(self):
         snapshots = [self.current.get('progress'), self.current.get('run_progress')] if self.current else []
-        latest = self.activity if self.busy else next((s for s in reversed(snapshots) if s and s.get('last_prompt_bytes') is not None), None)
+        sent = [s for s in snapshots if s and s.get('last_prompt_bytes') is not None]
+        latest = self.activity if self.busy else max(sent, key=lambda s: s.get('last_prompt_at', s['updated_at']), default=None)
         size = latest.get('last_prompt_bytes') if latest else None
         prompt = f'{size:,}/{self.service.config.max_prompt_bytes:,} bytes' if size is not None else 'not sent yet'
         valid = [s for s in snapshots if s]
@@ -421,10 +424,26 @@ class TerminalChat:
             return
         action = self.action_choices[self.action_index]
         self.close_actions()
-        if action.get('open'):
+        if action.get('request'):
+            self.busy = True
+            try:
+                if self.current is None:
+                    self.current = await asyncio.to_thread(self.service.new)
+                self.current = await asyncio.to_thread(self.service.choose_request, self.current['id'], action['request'])
+                self.composer.text = '/status' if self.current.get('workflow_run') else '/prepare'
+                self.notice = 'Request selected. Follow the next step above.'
+                self.plan_visible = False
+                self.refresh_history()
+                self.render()
+            except (ForgeError, OSError) as exc:
+                self.notice = display(str(exc))
+                self.app.invalidate()
+            finally:
+                self.busy = False
+        elif action.get('open'):
             self.open_session(action['open'])
         elif action.get('edit'):
-            self.composer.text = action['edit']
+            self.composer.buffer.set_document(Document(action['edit'], len(action['edit'])), bypass_readonly=True)
             self.notice = 'Enter the value, then press Enter to save.'
         elif action.get('retry'):
             await self.send(retry=True)
@@ -439,6 +458,12 @@ class TerminalChat:
         elif self.last_failed_command and self.last_failed_command.split()[0] in {'/prepare', '/discover', '/plan'}:
             retry = '/discover' if self.last_failed_command.split()[0] == '/prepare' else self.last_failed_command
             choices.append({'label': 'Retry ' + retry, 'command': retry})
+        elif self.current and self.current.get('run_status') == 'discovering':
+            choices.append({'label': 'Retry /discover', 'command': '/discover'})
+        elif self.current and self.current.get('run_status') == 'ready_to_plan':
+            choices.append({'label': 'Retry /plan', 'command': '/plan'})
+        elif self.current and self.current.get('run_status') in {'planned', 'interrupted', 'executing', 'turn_limit'}:
+            choices.append({'label': 'Review plan before resuming', 'command': '/run'})
         choices.extend([{'label': 'Adjust timeout', 'edit': '/settings timeout '},
                         {'label': 'Export session logs', 'command': '/logs'}])
         self.show_actions('Recovery actions', choices)
@@ -474,7 +499,9 @@ class TerminalChat:
         if command == '/history':
             results = await asyncio.to_thread(self.service.history, value)
             if results:
-                self.show_actions('History · newest 50 matches', [{'label': item['title'] + (' · ' + item['snippet'] if item['snippet'] else ''), 'open': item['id']} for item in results])
+                self.show_actions('History · up to 50 chats and requests',
+                                  [{'label': item['kind'].title() + ': ' + item['title'] + (' · ' + item['snippet'] if item['snippet'] else ''),
+                                    **({'open': item['id']} if item['kind'] == 'chat' else {'request': item['request']})} for item in results])
             else:
                 self.notice = 'No saved conversations match. Try /history with another query.'
             return True

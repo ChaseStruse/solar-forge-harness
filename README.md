@@ -680,3 +680,27 @@ guidance is preserved in full, and complete original snapshots remain in the aud
 Provider payloads and embedded context use compact UTF-8 JSON. These changes reduce
 prompt overhead without truncating conversation history or weakening approval and
 verification checks. Actual token savings and response latency depend on the model.
+
+Forge chat includes these workspace controls:
+
+- `/settings` opens a selectable menu for model, timeout, turn limit, and file,
+  context, and prompt byte limits. Choose a field, type its value, and press Enter.
+  `/settings timeout 600` also works. Values are validated and saved to
+  `.forge/config.toml`, then applied immediately. Changing models starts a new
+  conversation; old conversations and coding runs retain their original model.
+- `/recover` opens retry, timeout adjustment, and log-export actions. It also opens
+  automatically after a timeout. Recovery keeps pending messages and existing
+  runs; coding always requires plan review and explicit `/approve`.
+- `/history QUERY` searches saved chat text, pending messages, recorded errors,
+  request titles, and request content. Choose a conversation to reopen or a request
+  to select. `/history` lists up to 50 matching chats/requests.
+- `/plan` and `/run` open a scrollable plan review panel. `/review` reopens it.
+  Tab focuses the panel for scrolling, Escape closes it, and the composer remains
+  available for `/ask`, `/plan`, or explicit `/approve`. The panel shows the saved
+  plan, including affected files, verification, and risks when supplied.
+
+The persistent status strip shows the selected request, run identifier, stage,
+and next action. A usage strip shows the latest recorded prompt byte size against
+the current budget and reported input/output token totals for the chat and selected
+run. Bytes are the harness's prompt representation, not tokenizer counts; providers
+that omit usage are shown as unavailable. Unreported tokens are not estimated.

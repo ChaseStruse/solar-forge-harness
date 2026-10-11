@@ -41,9 +41,11 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
             await ui.send()
             self.assertIn('positive', ui.notice)
             self.assertEqual(service.config.max_prompt_bytes, 500000)
+            ui.last_failed_command = '/prepare'
             ui.composer.text = '/settings model next-model'
             await ui.send()
             self.assertIsNone(ui.current)
+            self.assertIsNone(ui.last_failed_command)
             self.assertEqual(service.config.model, 'next-model')
             self.assertEqual(service.get(original)['model'], 'test')
             self.assertEqual(service.new()['model'], 'next-model')
@@ -100,3 +102,60 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('Tokens: unavailable', ui.usage_indicator())
             self.assertFalse(Audit.open(service.workspace, ui.current['workflow_run']).load().get('approved_plan'))
             self.assertEqual(len(service.provider.calls), 2)
+
+    async def test_history_can_select_unprepared_request_without_model_call(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            service = self.make_service(tmp)
+            ui = TerminalChat(service, input=pipe, output=DummyOutput())
+            ui.composer.text = '/history billing'
+            await ui.send()
+            self.assertEqual(ui.action_choices[0]['request'], DEFAULT_REQUEST)
+            await ui.accept_action()
+            self.assertEqual(ui.current['request_path'], DEFAULT_REQUEST)
+            self.assertEqual(ui.composer.text, '/prepare')
+            self.assertEqual(service.provider.calls, [])
+
+    async def test_keyboard_recovery_can_edit_timeout_without_discarding_message(self):
+        from test_terminal_chat import WideOutput
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            service = self.make_service(tmp, TextProvider(ForgeError('Provider timed out')))
+            ui = TerminalChat(service, input=pipe, output=WideOutput())
+            ui.composer.text = 'Question'
+            await ui.send()
+            task = asyncio.create_task(ui.run())
+            try:
+                await asyncio.sleep(.05)
+                pipe.send_text('\x1b[B\r')
+                for _ in range(100):
+                    if ui.composer.text == '/settings timeout ':
+                        break
+                    await asyncio.sleep(.01)
+                self.assertEqual(ui.composer.text, '/settings timeout ')
+                pipe.send_text('600\r')
+                for _ in range(100):
+                    if service.config.timeout == 600 and not ui.busy:
+                        break
+                    await asyncio.sleep(.01)
+                self.assertEqual(service.config.timeout, 600)
+                self.assertEqual(ui.current['pending_message'], 'Question')
+                pipe.send_text('\x11')
+                await asyncio.wait_for(task, 2)
+            finally:
+                if ui.app.is_running:
+                    ui.app.exit()
+                await task
+
+    async def test_settings_reconfigure_http_adapter_and_preserve_unrelated_config(self):
+        from solar_forge.providers import HTTPProvider
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self.make_service(tmp)
+            service.provider = HTTPProvider(service.config)
+            path = Path(tmp) / '.forge/config.toml'
+            path.write_text(path.read_text() + '\n# Preserve this local comment\n')
+            before = service.provider
+            service.settings(None, 'timeout 600')
+            self.assertIsNot(service.provider, before)
+            self.assertEqual(service.provider.config.timeout, 600)
+            self.assertEqual(service.provider.audit_identity, before.audit_identity)
+            self.assertIn('# Preserve this local comment', path.read_text())
+            self.assertEqual(Config.load(path).verification, service.config.verification)
