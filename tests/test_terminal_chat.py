@@ -182,6 +182,40 @@ class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
                     ui.app.exit()
                 await task
 
+    async def test_slash_opens_rendered_selectable_command_menu(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            ui = TerminalChat(ChatService(Workspace(Path(tmp)), Config(model='test'), TextProvider()), input=pipe, output=WideOutput())
+            task = asyncio.create_task(ui.run())
+            try:
+                await asyncio.sleep(.05)
+                pipe.send_text('/')
+                for _ in range(100):
+                    if ui.composer.buffer.complete_state:
+                        break
+                    await asyncio.sleep(.01)
+                self.assertIsNotNone(ui.composer.buffer.complete_state)
+                await asyncio.sleep(.05)
+                screen = ui.app.renderer._last_screen
+                rendered = '\n'.join(''.join(cell.char for _, cell in sorted(row.items())) for _, row in sorted(screen.data_buffer.items()))
+                self.assertIn('/request', rendered)
+                self.assertIn('/context', rendered)
+                self.assertIsNone(ui.current)
+                pipe.send_text('\x1b[B')
+                await asyncio.sleep(.05)
+                self.assertIsNotNone(ui.composer.buffer.complete_state.current_completion)
+                chosen = ui.composer.buffer.complete_state.current_completion.text
+                pipe.send_text('\r')
+                await asyncio.sleep(.05)
+                self.assertEqual(ui.composer.text, chosen)
+                self.assertIsNone(ui.current)
+                self.assertIsNone(ui.composer.buffer.complete_state)
+                pipe.send_text('\x11')
+                await asyncio.wait_for(task, 2)
+            finally:
+                if ui.app.is_running:
+                    ui.app.exit()
+                await task
+
     async def test_discard_pending_returns_editable_advice_during_request_draft(self):
         with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
             service = ChatService(Workspace(Path(tmp)), Config(model='test', max_prompt_bytes=100), TextProvider())

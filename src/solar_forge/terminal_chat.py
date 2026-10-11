@@ -11,7 +11,8 @@ from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.filters import Condition, has_focus
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.key_binding.bindings.focus import focus_next, focus_previous
-from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, VSplit
+from prompt_toolkit.layout import ConditionalContainer, Float, FloatContainer, HSplit, Layout, VSplit
+from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, Label, TextArea
@@ -34,13 +35,16 @@ def display(text: str) -> str:
 class SlashCompleter(Completer):
     commands = list(dict.fromkeys(['/request', *re.findall(r'^  (/[^ ]+)', HELP, re.M)]))
 
+    descriptions = {line.strip().split()[0]: re.split(r' {2,}', line.strip())[-1]
+                    for line in HELP.splitlines() if line.startswith('  /')}
+
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
         if text in self.commands or not text.startswith('/') or any(char.isspace() for char in text):
             return
         for command in self.commands:
             if command.startswith(text) and command != text:
-                yield Completion(command, start_position=-len(text))
+                yield Completion(command, start_position=-len(text), display_meta=self.descriptions.get(command, ''))
 
 
 class ConversationLexer(Lexer):
@@ -103,6 +107,9 @@ class TerminalChat:
                            ' /help Actions  Ctrl+N New  Ctrl+L History  Ctrl+R Retry  Ctrl+X Stop  Tab Next pane  Ctrl+Q Quit'),
                   style='class:footer'),
         ])
+        # TextArea provides completion state but does not install a visible popup.
+        root = FloatContainer(content=root, floats=[
+            Float(xcursor=True, ycursor=True, content=CompletionsMenu(max_height=8, scroll_offset=1))])
         self.app = Application(layout=Layout(root, focused_element=self.composer), key_bindings=keys,
                                full_screen=True, mouse_support=True, input=input, output=output,
                                refresh_interval=0.25,
@@ -112,6 +119,10 @@ class TerminalChat:
                                    'history': 'bg:#111412 #919b91', 'conversation': 'bg:#161817 #e7ebe6',
                                    'user': '#83cfff', 'assistant': '#e7ebe6', 'workflow-text': '#c4e29c',
                                    'composer': 'bg:#20261f #83cfff', 'frame.border': '#637951',
+                                   'completion-menu.completion': 'bg:#252e22 #e7ebe6',
+                                   'completion-menu.completion.current': 'bg:#c4e29c #182119 bold',
+                                   'completion-menu.meta.completion': 'bg:#252e22 #aebb9f',
+                                   'completion-menu.meta.completion.current': 'bg:#c4e29c #182119',
                                    'frame.label': '#c4e29c bold'}))
         self.refresh_history()
         if resume:

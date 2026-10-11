@@ -656,7 +656,8 @@ LM Studio server logs or API credentials.
 
 Forge chat colors user messages blue, model replies light gray, and workflow
 results green. Type `/` to open command suggestions, use Up/Down to choose,
-and Tab or Enter to fill a command. Press Enter again to send it. Complete
+and Tab or Enter to fill a command. The popup shows command descriptions and
+scrolls through longer lists with the arrow keys. Press Enter again to send it. Complete
 commands and command arguments do not trigger suggestions.
 
 Workflow commands appear in the conversation as soon as they start. The Activity
