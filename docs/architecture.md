@@ -11,6 +11,7 @@ The UI, workflow rules, transport, and file operations have separate modules.
 | --- | --- |
 | `cli.py` | Parse commands, display artifacts, prompt for answers and approval |
 | `domain.py` | Validate request headings and TOML configuration |
+| `standards.py` | Bounded language detection and composition of packaged coding-standard templates |
 | `context.py` | Load explicit documentation and bundled guidance with provenance |
 | `retrieval.py` | Local passage index, ranked search, freshness checks, citations and retrieval evidence |
 | `providers.py` | Normalize HTTP transports behind `Provider.complete` |
@@ -191,3 +192,18 @@ flag. Acceptance criteria still need human review.
 4. Add Git and deployment tools with separate reviewable approval records.
 5. Introduce project-level locking and optional coordinated agents only after
    defining ownership of shared files, decisions, and audit artifacts.
+
+## Language standards at initialization
+
+New-project initialization selects supported languages using explicit repeatable
+CLI flags, the interactive fourth setup step, or bounded filename detection in
+noninteractive mode. The selection is persisted as `harness.languages` (an empty
+list means generic). Legacy configurations default to the empty list.
+
+`standards.py` composes generic coding guidance with only the selected packaged
+Python, TypeScript, and JavaScript sections. Init writes that composition to the
+existing `.forge/standards/coding.md` context path; unselected templates are not
+injected into model prompts. Guidance files are created exclusively, preserving
+existing bytes on repeat setup. Missing coding guidance is restored from the saved
+selection. Conflicting language flags on existing configuration fail before writes.
+All interactive choices are gathered before setup creates files.

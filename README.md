@@ -73,7 +73,7 @@ Run inside the project you want the agent to work on:
 forge init
 ```
 
-Forge walks you through three steps:
+Forge walks you through four steps:
 
 1. **Choose your model service.** Pick Ollama, OpenAI, Claude, or an
    OpenAI-compatible server. Enter your model name, keep or change the service
@@ -85,6 +85,9 @@ Forge walks you through three steps:
 3. **Choose local document search (RAG).** Enable a local library
    (default storage: `.forge/rag/`) or choose “Set up later.” After setup, run
    `forge index` or `/index` in chat to build it. No embedding service is needed.
+4. **Choose coding standards.** Accept detected languages or select Python,
+   TypeScript, JavaScript, or a comma-separated combination. Choose `generic` for
+   general guidance. Forge creates editable standards in `.forge/standards/coding.md`.
 
 Setup creates `agentic_audit/requests/default/request.md`, `.forge/config.toml`, and editable guidance in
 `.forge/standards/`. It ends with a list of created or preserved files, your
@@ -96,6 +99,47 @@ missing request or guidance templates. To change saved settings, edit
 For scripts, run `forge init --no-interactive`. Prompts are also skipped when
 input is not a terminal. This creates templates and `docs/`; set the model in
 `.forge/config.toml` before chatting.
+
+### Language-specific starter standards
+
+Select templates explicitly when creating a project configuration:
+
+```sh
+forge init --language python
+forge init --language typescript
+forge init --language javascript
+forge init --no-interactive --language python --language typescript
+forge init --no-interactive --language generic
+```
+
+Without flags, interactive setup offers detected defaults; noninteractive setup
+uses them automatically. Detection inspects up to 500 project paths, excluding
+known secrets, symlinks, audit artifacts, dependencies, and build folders. It uses
+source extensions and familiar markers such as `pyproject.toml`, `tsconfig.json`,
+and `package.json`. A package manifest without TypeScript evidence defaults to
+JavaScript. Projects with both `.ts` and `.js` files may select both. Detection is
+a starting point: override it for unusual layouts, configuration-only JavaScript,
+or larger repositories. No supported language detected means generic guidance.
+
+The selected sections are combined with general coding guidance in
+`.forge/standards/coding.md`, which the default `harness.docs` already includes in
+model context. Python guidance covers typing, exceptions, resources, dependencies,
+and tests. TypeScript covers type boundaries, narrowing, async behavior, and
+runtime validation. JavaScript covers coercion, modules, async behavior, lifecycle
+cleanup, and tests. Templates defer to existing project requirements and tooling;
+they do not install formatters or change compiler/build settings.
+
+New configurations save selections in `harness.languages`. Edit `coding.md`
+freely: repeated `forge init` preserves both configuration and existing guidance.
+If that guidance file is missing, init recreates it using the saved selections.
+Older configurations without `languages` retain generic defaults.
+
+To change an existing project's selection, edit `harness.languages` explicitly
+and update `coding.md` to suit the project. If you want a complete fresh template,
+back up and remove `coding.md`, then rerun `forge init`. Conflicting `--language`
+flags on an already-configured project report this requirement and leave its
+files untouched. Any changed project guidance requires fresh preparation for
+existing coding runs.
 
 To start, run `forge chat` and type `/request`. Forge guides you through the
 title, description, details, and results you want. Use `/ask` followed by a
