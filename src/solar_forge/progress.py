@@ -114,6 +114,7 @@ def update_progress(audit, event):
             data['history_limited'] = True
         data['active_since'] = at
         data['action'] = 'Waiting for model'
+        data['last_prompt_bytes'] = event.get('prompt_bytes')
         data['usage']['calls'] += 1
     elif kind in {'provider_call_finished', 'provider_call_failed'}:
         stop()

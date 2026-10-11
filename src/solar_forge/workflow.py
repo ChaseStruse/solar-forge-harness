@@ -52,7 +52,7 @@ def call(audit: Audit, provider: Provider, system: str, messages: list[dict], ma
     record = {'identity': identity, 'identity_source': 'adapter' if actual_identity is not None else 'run_configuration',
               'system': system, 'messages': messages}
     audit.write(f"calls/{call_id}-input.json", json.dumps(record, ensure_ascii=False))
-    audit.event("provider_call_started", call_id=call_id, identity=identity)
+    audit.event("provider_call_started", call_id=call_id, identity=identity, prompt_bytes=len(serialized.encode()))
     partial = []
     usage = None
     try:

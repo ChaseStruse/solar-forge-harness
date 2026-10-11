@@ -14,6 +14,7 @@ from .workflow import call
 from .workspace import Workspace, atomic_write
 from .personality import PERSONALITY
 from .prompts import compact_context, prompt_json
+from .chat_settings import FIELDS, update as update_setting
 from .progress import read_progress
 
 CHAT_SYSTEM = PERSONALITY + '\n' + '''You are Solar Forge, a helpful coding and project-planning assistant.
@@ -74,7 +75,8 @@ class ChatService:
             except (ForgeError, OSError):
                 pass
         return {key: state.get(key) for key in ('title', 'provider', 'model', 'messages',
-                                               'pending_message', 'created_at', 'updated_at', 'workflow_run')} | {
+                                               'pending_message', 'created_at', 'updated_at', 'workflow_run', 'request_path', 'reviewed_plan')} | {
+            'run_status': (Audit.open(self.workspace, state['workflow_run']).load()['status'] if run_progress else None),
             'progress': read_progress(audit), 'run_progress': run_progress,
             'id': audit.path.relative_to(self.workspace.root).as_posix(),
             'busy': (audit.path / '.lock').exists(), 'input_mode': input_mode(state),
@@ -255,6 +257,43 @@ class ChatService:
             if not error:
                 audit.event('chat_command_finished')
         return self.get(session) | {'command_error': error}
+
+    def settings(self, session: str | None, value: str = '') -> dict:
+        if not value:
+            return {'values': {field: getattr(self.config, field) for field in FIELDS}}
+        parts = value.split(maxsplit=1)
+        if len(parts) != 2:
+            raise ForgeError('Use /settings FIELD VALUE, or /settings for the menu.')
+        audit = self._open(session) if session else None
+        if audit:
+            with audit.lock():
+                changed_model = update_setting(self, *parts)
+                audit.event('chat_settings_changed', field=parts[0], value=getattr(self.config, parts[0]))
+        else:
+            changed_model = update_setting(self, *parts)
+        return {'new_chat_required': changed_model,
+                'message': f'Saved {parts[0]} = {getattr(self.config, parts[0])}. ' +
+                ('Start a new conversation for this model; existing runs retain their original model.' if changed_model else 'Applied to this session.')}
+
+    def history(self, query: str = '') -> list[dict]:
+        results = []
+        for entry in self.list():
+            chat = self.get(entry['id'])
+            text = '\n'.join(message['content'] for message in chat['messages'])
+            text += '\n' + (chat.get('pending_message') or '')
+            event_path = self._open(entry['id']).path / 'events.jsonl'
+            if event_path.is_file():
+                for line in event_path.read_text().splitlines():
+                    event = json.loads(line)
+                    if isinstance(event.get('error'), str):
+                        text += '\n' + event['error']
+            haystack = entry['title'] + '\n' + (chat.get('request_path') or '') + '\n' + text
+            if query.casefold() in haystack.casefold():
+                match = next((line for line in text.splitlines() if query and query.casefold() in line.casefold()), '')
+                results.append(entry | {'snippet': match[:160]})
+            if len(results) >= 50:
+                break
+        return results
 
     def request_options(self, message: str, session: str | None = None) -> list[dict] | None:
         """Return picker choices only when an implicit request/run is missing."""

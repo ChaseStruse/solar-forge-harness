@@ -21,6 +21,10 @@ HELP = '''Work on a request here in chat:
   /select NUMBER     Select a request from /requests
   /edit-request      Open the selected request for editing
   /edit FIELD TEXT   Edit title, description, technical_details, or acceptance_criteria
+  /settings          Adjust model, timeout, and limits in chat
+  /history [QUERY]   Search saved conversations, requests, and errors
+  /recover           Choose retry, timeout settings, or log export
+  /review            Open the current reviewed plan screen
   /logs              Export current chat and linked run diagnostics
   /context           Inspect included context and prompt budget
   /index             Build or refresh the local document library

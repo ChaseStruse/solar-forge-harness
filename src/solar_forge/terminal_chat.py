@@ -35,8 +35,10 @@ def display(text: str) -> str:
 class SlashCompleter(Completer):
     commands = list(dict.fromkeys(['/request', *re.findall(r'^  (/[^ ]+)', HELP, re.M)]))
 
-    descriptions = {line.strip().split()[0]: re.split(r' {2,}', line.strip())[-1]
-                    for line in HELP.splitlines() if line.startswith('  /')}
+    descriptions = {}
+    for line in HELP.splitlines():
+        if line.startswith('  /'):
+            descriptions.setdefault(line.strip().split()[0], re.split(r' {2,}', line.strip())[-1])
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
@@ -70,6 +72,11 @@ class TerminalChat:
         self.request_choices = None
         self.request_choice_index = 0
         self.request_command = ''
+        self.action_choices = None
+        self.action_index = 0
+        self.action_title = ''
+        self.last_failed_command = None
+        self.plan_visible = False
         self.live_events = []
         self.conversation_styles = []
         self.notice = 'Enter sends. Alt+Enter adds a line. /help lists actions.'
@@ -80,11 +87,15 @@ class TerminalChat:
                                  wrap_lines=True, completer=SlashCompleter(), complete_while_typing=True, read_only=Condition(lambda: self.busy or self.request_choices is not None), style='class:composer')
         self.request_picker = TextArea(read_only=True, scrollbar=True, wrap_lines=False,
                                        height=Dimension(min=3, max=8), style='class:composer')
+        self.action_picker = TextArea(read_only=True, scrollbar=True, wrap_lines=False, height=Dimension(min=3, max=6), style='class:composer')
+        self.plan_screen = TextArea(read_only=True, scrollbar=True, wrap_lines=True, height=Dimension(min=4, max=12), style='class:conversation')
         keys = self._keys()
         body = VSplit([
             ConditionalContainer(Frame(self.history, title='Saved chats'),
                                  filter=Condition(lambda: self.app.output.get_size().columns >= 85)),
             HSplit([Frame(self.conversation, title=lambda: display(self.current['title']) if self.current else 'New chat'),
+                    Label(lambda: self.context_indicator(), style='class:workflow'),
+                    Label(lambda: self.usage_indicator(), style='class:status'),
                     Label(lambda: display('Working… Ctrl+X requests a stop.' if self.busy else
                                           self.current.get('workflow_hint', '') if self.current else
                                           'Start: /request or /prepare. Continue: /runs. Help: /help.'),
@@ -94,6 +105,8 @@ class TerminalChat:
                         filter=Condition(lambda: self.activity is not None or self.busy)),
                     ConditionalContainer(Frame(self.request_picker, title='Choose a request · ↑/↓ select · Enter confirm · Esc cancel'),
                                          filter=Condition(lambda: self.request_choices is not None)),
+                    ConditionalContainer(Frame(self.plan_screen, title='Plan review · Tab to scroll · /approve starts coding · Esc closes'), filter=Condition(lambda: self.plan_visible)),
+                    ConditionalContainer(Frame(self.action_picker, title=lambda: self.action_title + ' · ↑/↓ · Enter · Esc'), filter=Condition(lambda: self.action_choices is not None)),
                     Label(lambda: display(self.notice), style='class:status'),
                     Frame(self.composer, title='Message · Enter send / Alt+Enter new line')]),
         ], padding=1)
@@ -146,8 +159,31 @@ class TerminalChat:
 
     def _keys(self) -> KeyBindings:
         keys = KeyBindings()
-        idle = Condition(lambda: not self.busy and self.request_choices is None)
+        idle = Condition(lambda: not self.busy and self.request_choices is None and self.action_choices is None)
         picking = Condition(lambda: self.request_choices is not None and not self.busy)
+
+        actions = Condition(lambda: self.action_choices is not None and not self.busy)
+
+        @keys.add('up', filter=actions, eager=True)
+        @keys.add('down', filter=actions, eager=True)
+        def action_move(event):
+            self.action_index = max(0, min(len(self.action_choices) - 1,
+                                          self.action_index + (1 if event.key_sequence[0].key == 'down' else -1)))
+            self.render_actions()
+
+        @keys.add('enter', filter=actions, eager=True)
+        def action_select(event):
+            event.app.create_background_task(self.accept_action())
+
+        @keys.add('escape', filter=actions, eager=True)
+        def action_cancel(event):
+            self.close_actions()
+
+        @keys.add('escape', filter=Condition(lambda: self.plan_visible) & idle, eager=True)
+        def plan_close(event):
+            self.plan_visible = False
+            event.app.layout.focus(self.composer)
+            event.app.invalidate()
 
         @keys.add('up', filter=picking, eager=True)
         def request_up(event):
@@ -212,11 +248,11 @@ class TerminalChat:
         def complete_command(event):
             self.accept_completion()
 
-        @keys.add('tab', filter=~picking & Condition(lambda: self.composer.buffer.complete_state is None))
+        @keys.add('tab', filter=~picking & ~actions & Condition(lambda: self.composer.buffer.complete_state is None))
         def next_pane(event):
             focus_next(event)
 
-        @keys.add('s-tab', filter=~picking)
+        @keys.add('s-tab', filter=~picking & ~actions)
         def previous_pane(event):
             focus_previous(event)
 
@@ -254,6 +290,8 @@ class TerminalChat:
         if self.busy:
             return
         self.close_request_picker()
+        self.close_actions()
+        self.plan_visible = False
         try:
             self.current = self.service.get(session)
             self.live_events = []
@@ -271,6 +309,8 @@ class TerminalChat:
         if self.busy:
             return
         self.close_request_picker()
+        self.close_actions()
+        self.plan_visible = False
         self.current = None
         self.live_events = []
         self.activity = None
@@ -336,6 +376,116 @@ class TerminalChat:
         self.composer.text = '/run' if command == '/approve' else message
         await self.send(skip_picker=True)
 
+    def context_indicator(self):
+        if not self.current:
+            return 'Request: none · Stage: new chat'
+        request = self.current.get('request_path') or 'none'
+        slug = request.split('/')[-2] if request != 'none' else request
+        run = self.current.get('workflow_run')
+        return display(f'Request: {slug} · Stage: {self.current.get("run_status") or "chat"}' +
+                       (f' · Run: {run.split("/")[-1]}' if run else ''))
+
+    def usage_indicator(self):
+        snapshots = [self.current.get('progress'), self.current.get('run_progress')] if self.current else []
+        latest = self.activity if self.busy else next((s for s in reversed(snapshots) if s and s.get('last_prompt_bytes') is not None), None)
+        size = latest.get('last_prompt_bytes') if latest else None
+        prompt = f'{size:,}/{self.service.config.max_prompt_bytes:,} bytes' if size is not None else 'not sent yet'
+        valid = [s for s in snapshots if s]
+        incoming = sum(s['usage']['input_tokens'] for s in valid)
+        outgoing = sum(s['usage']['output_tokens'] for s in valid)
+        reports = sum(s['usage']['input_reports'] + s['usage']['output_reports'] for s in valid)
+        input_reports = sum(s['usage']['input_reports'] for s in valid)
+        output_reports = sum(s['usage']['output_reports'] for s in valid)
+        tokens = ((f'{incoming:,}' if input_reports else 'unavailable') + ' in / ' +
+                  (f'{outgoing:,}' if output_reports else 'unavailable') + ' out (reported)') if reports else 'unavailable'
+        return f'Last prompt: {prompt} · Tokens: {tokens}'
+
+    def show_actions(self, title, choices):
+        self.action_title, self.action_choices, self.action_index = title, choices, 0
+        self.render_actions()
+        self.app.layout.focus(self.action_picker)
+
+    def render_actions(self):
+        self.action_picker.text = '\n'.join(('› ' if index == self.action_index else '  ') + display(item['label'])
+                                            for index, item in enumerate(self.action_choices))
+        self.action_picker.buffer.cursor_position = self.action_picker.document.translate_row_col_to_index(self.action_index, 0)
+        self.app.invalidate()
+
+    def close_actions(self):
+        self.action_choices = None
+        self.app.layout.focus(self.composer)
+        self.app.invalidate()
+
+    async def accept_action(self):
+        if not self.action_choices or self.busy:
+            return
+        action = self.action_choices[self.action_index]
+        self.close_actions()
+        if action.get('open'):
+            self.open_session(action['open'])
+        elif action.get('edit'):
+            self.composer.text = action['edit']
+            self.notice = 'Enter the value, then press Enter to save.'
+        elif action.get('retry'):
+            await self.send(retry=True)
+        else:
+            self.composer.text = action['command']
+            await self.send()
+
+    def show_recovery(self):
+        choices = []
+        if self.current and self.current.get('pending_message'):
+            choices.append({'label': 'Retry pending model reply', 'retry': True})
+        elif self.last_failed_command and self.last_failed_command.split()[0] in {'/prepare', '/discover', '/plan'}:
+            retry = '/discover' if self.last_failed_command.split()[0] == '/prepare' else self.last_failed_command
+            choices.append({'label': 'Retry ' + retry, 'command': retry})
+        choices.extend([{'label': 'Adjust timeout', 'edit': '/settings timeout '},
+                        {'label': 'Export session logs', 'command': '/logs'}])
+        self.show_actions('Recovery actions', choices)
+
+    def show_plan(self):
+        if not self.current or not self.current.get('reviewed_plan'):
+            self.notice = 'Use /run to display the plan before opening /review.'
+            return
+        from .audit import Audit
+        run = Audit.open(self.service.workspace, self.current['workflow_run'])
+        self.plan_screen.text = display(run.read('plan.md'))
+        self.plan_screen.buffer.cursor_position = 0
+        self.plan_visible = True
+        self.app.invalidate()
+
+    async def local_command(self, message):
+        parts = message.split(maxsplit=1)
+        command, value = parts[0].lower(), parts[1] if len(parts) > 1 else ''
+        if command == '/settings':
+            if value:
+                result = await asyncio.to_thread(self.service.settings, self.current['id'] if self.current else None, value)
+                if result['new_chat_required']:
+                    self.busy = False
+                    self.new_chat()
+                    self.busy = True
+                self.notice = result['message']
+                self.composer.text = ''
+            else:
+                result = self.service.settings(None)
+                self.show_actions('Settings', [{'label': f'{field}: {setting}', 'edit': f'/settings {field} '}
+                                              for field, setting in result['values'].items()])
+            return True
+        if command == '/history':
+            results = await asyncio.to_thread(self.service.history, value)
+            if results:
+                self.show_actions('History · newest 50 matches', [{'label': item['title'] + (' · ' + item['snippet'] if item['snippet'] else ''), 'open': item['id']} for item in results])
+            else:
+                self.notice = 'No saved conversations match. Try /history with another query.'
+            return True
+        if command == '/recover':
+            self.show_recovery()
+            return True
+        if command == '/review':
+            self.show_plan()
+            return True
+        return False
+
     def activity_text(self) -> str:
         width = max(12, self.app.output.get_size().columns - (34 if self.app.output.get_size().columns >= 85 else 6))
         if self.activity is None:
@@ -386,9 +536,19 @@ class TerminalChat:
         self.app.invalidate()
 
     async def send(self, *, retry: bool = False, skip_picker: bool = False) -> None:
-        if self.busy or self.request_choices is not None:
+        if self.busy or self.request_choices is not None or self.action_choices is not None:
             return
         message = self.composer.text.strip()
+        if not retry and message and message.split(maxsplit=1)[0].lower() in {'/settings', '/history', '/recover', '/review'}:
+            self.busy = True
+            try:
+                await self.local_command(message)
+            except (ForgeError, OSError, ValueError) as exc:
+                self.notice = display(str(exc))
+            finally:
+                self.busy = False
+                self.render()
+            return
         if not retry and message.startswith('/open '):
             try:
                 number = int(message.removeprefix('/open ').strip())
@@ -473,6 +633,10 @@ class TerminalChat:
                                                       cancelled=self.stop_requested.is_set)
                 self.notice = ('Action could not finish. See the details above.' if self.current.get('command_error')
                                else 'Progress saved. Follow the next step above, or ask your model for help.')
+                if self.current.get('command_error'):
+                    self.last_failed_command = message
+                if self.current.get('reviewed_plan') and message.split()[0].lower() in {'/plan', '/run'}:
+                    self.show_plan()
                 if 'discarded_message' in self.current:
                     # Preserve model-advice semantics even while a wizard is active.
                     draft = '/ask ' + self.current['discarded_message']
@@ -485,6 +649,7 @@ class TerminalChat:
                                                       cancelled=self.stop_requested.is_set)
                 self.notice = 'Reply saved. Enter sends your next message.'
         except (ForgeError, OSError) as exc:
+            self.last_failed_command = message if command else None
             self.notice = display(str(exc)) + ('  Use /status to check progress.' if command else
                                                '  Ctrl+R retries; /discard-pending lets you edit or continue.')
             if self.current:
@@ -498,12 +663,16 @@ class TerminalChat:
                 self.current = self.service.get(self.current['id'])
         finally:
             if self.current:
+                if not self.current.get('reviewed_plan'):
+                    self.plan_visible = False
                 self.activity = ((self.current.get('run_progress') or self.current.get('progress'))
                                  if command else self.current.get('progress'))
             self.partial_reply = ''
             self.busy = False
             self.refresh_history()
             self.render()
+            if ('timed out' in self.notice.lower() or (self.current and 'timed out' in (self.current.get('command_error') or '').lower())):
+                self.show_recovery()
             if self.exit_requested and self.app.is_running:
                 self.app.exit()
 
