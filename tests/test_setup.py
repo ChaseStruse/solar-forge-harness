@@ -36,7 +36,7 @@ class SetupTests(unittest.TestCase):
             self.assertTrue((root / '.forge/standards/coding.md').is_file())
             self.assertIn('forge chat', out)
             self.assertIn('request.md', out)
-            self.assertIn('not available yet', out)
+            self.assertIn('run forge index', out)
             self.assertIn(str(root), out)
 
     def test_all_providers_existing_folder_and_local_rag(self):

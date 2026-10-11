@@ -206,15 +206,15 @@ def search(workspace, config, query):
         if score:
             ranked.append((score, chunk))
     ranked.sort(key=lambda item: (-item[0], item[1]['path'], item[1]['start_line']))
-    used = 0
+    used = len(encoded([]))
     for score, chunk in ranked:
         hit = chunk | {'score': round(score, 6),
                        'citation': f"{chunk['path']}:{chunk['start_line']}-{chunk['end_line']}"}
-        size = len(encoded(hit))
-        if used + size > config.rag.max_result_bytes:
+        size = len(encoded([*result['results'], hit]))
+        if size > config.rag.max_result_bytes:
             continue
         result['results'].append(hit)
-        used += size
+        used = size
         if len(result['results']) >= config.rag.top_k:
             break
     result['result_bytes'] = used

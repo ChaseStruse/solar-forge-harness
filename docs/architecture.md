@@ -12,6 +12,7 @@ The UI, workflow rules, transport, and file operations have separate modules.
 | `cli.py` | Parse commands, display artifacts, prompt for answers and approval |
 | `domain.py` | Validate request headings and TOML configuration |
 | `context.py` | Load explicit documentation and bundled guidance with provenance |
+| `retrieval.py` | Local passage index, ranked search, freshness checks, citations and retrieval evidence |
 | `providers.py` | Normalize HTTP transports behind `Provider.complete` |
 | `workflow.py` | Discovery, questions, answers, planning, context consistency |
 | `agent.py` | Approved execution, action validation, write journal and recovery |
@@ -130,6 +131,33 @@ or cryptographically chained log. State is the recovery authority; event records
 may repeat around interrupted actions. The audit is reviewable project evidence,
 not a tamper-proof compliance ledger. Exact byte snapshots preserve UTF-8 CRLF.
 
+## Local retrieval
+
+Core guidance remains in `harness.docs`. Optional `rag.sources` define a separate
+library; empty sources fall back to the existing document list. The standard-library
+retrieval module chunks supported text files into bounded passages with path, line
+range, and source hash. A versioned JSON index is written atomically; a checksum
+catches accidental corruption. This is not a tamper-proof or encrypted store.
+Search checks a fresh source manifest before BM25-style lexical ranking. Indexing
+and queries make no provider calls. File count, source bytes, index size, query
+length, result count, and serialized passage-result bytes are bounded.
+
+The CLI exposes index, status, and search without constructing a provider. Chat
+has equivalent commands and automatically retrieves for the current message.
+Preparation retrieves for the request and includes results in its context snapshot.
+Coding agents can use the named `search_docs` action. Retrieval results are saved
+under audit `retrieval/` with query, citations, hashes, and freshness information;
+retrieved paths are accepted as question sources only after they were supplied.
+Prompt instructions treat passages as reference data, never authorization.
+
+Prepared runs bind retrieval policy and source fingerprints. Source/configuration
+changes invalidate preparation even after rebuilding the index. Disabled RAG does
+not affect legacy runs. File tools protect library sources and index storage.
+Always-on guidance retains its independent change checks and prompt budgets.
+Source files are re-read for freshness, so this bounded first version favors
+correctness over large-corpus performance. There are no embeddings, remote data
+connectors, or semantic query expansion.
+
 ## Verification execution
 
 Preparation snapshots the validated verification policy into run state. Planning
@@ -159,7 +187,7 @@ flag. Acceptance criteria still need human review.
    timeout/output budgets, and tests proving workspace/network isolation.
 2. Build an acceptance verifier that attaches actual command and artifact
    evidence before transitioning from review to completion.
-3. Add streaming adapters, cancellation, usage reporting, and context retrieval.
+3. Add streaming adapters, cancellation, usage reporting, and semantic retrieval.
 4. Add Git and deployment tools with separate reviewable approval records.
 5. Introduce project-level locking and optional coordinated agents only after
    defining ownership of shared files, decisions, and audit artifacts.

@@ -126,7 +126,7 @@ def discover(audit: Audit, provider: Provider, max_prompt_bytes: int = 500000) -
         'Missing project docs are identified in context.skipped; cite bundled guidance '
         'when asking about their missing rules. All questions block planning. Return '
         '{"questions":[{"question":"...","rationale":"decision this resolves",'
-        '"sources":["request.md or a supplied documents key"]}]}. '
+        '"sources":["request.md, a supplied documents key, or retrieved source path"]}]}. '
         'An empty array is permitted if no clarification is needed.')
     data = parse_json(call(audit, provider, SYSTEM, [{"role": "user", "content": json.dumps(content)}], max_prompt_bytes))
     sources = context_sources(content["context"])

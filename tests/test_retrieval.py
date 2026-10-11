@@ -121,6 +121,8 @@ class RetrievalTests(unittest.TestCase):
         self.assertTrue(result['results'])
         self.assertLessEqual(len(result['results']), 2)
         self.assertLessEqual(result['result_bytes'], 3000)
+        self.assertEqual(result['result_bytes'], len(json.dumps(result['results'], ensure_ascii=False,
+                         sort_keys=True, separators=(',', ':')).encode()))
 
     def test_separate_library_does_not_fill_always_on_context(self):
         build_index(self.ws, self.cfg)
@@ -191,6 +193,50 @@ class RetrievalTests(unittest.TestCase):
             self.assertIn('Document search: ready', out.getvalue())
             self.assertIn('Evidence: agentic_audit/', out.getvalue())
         self.assertFalse(Audit.discover(self.ws))
+
+    def test_rebuild_unchanged_library_preserves_run_and_policy_changes_do_not(self):
+        build_index(self.ws, self.cfg)
+        audit = prepare(self.ws, self.cfg, DEFAULT_REQUEST, ScriptedProvider({'questions': []}))
+        build_index(self.ws, self.cfg)
+        assert_current(self.ws, self.cfg, audit)
+        changed = replace(self.cfg, rag=replace(self.cfg.rag, top_k=1))
+        self.assertEqual(index_status(self.ws, changed)['status'], 'stale')
+        with self.assertRaisesRegex(ForgeError, 'Retrieval sources'):
+            assert_current(self.ws, changed, audit)
+        with self.assertRaisesRegex(ForgeError, 'Retrieval sources'):
+            assert_current(self.ws, replace(self.cfg, rag=RagConfig()), audit)
+
+    def test_source_and_index_budgets_fail_without_partial_cache(self):
+        from unittest.mock import patch
+        for constant, value, message in [('MAX_FILES', 1, '500 documents'),
+                                         ('MAX_SOURCE_BYTES', 10, '5 MB'),
+                                         ('MAX_INDEX_BYTES', 100, '20 MB')]:
+            with self.subTest(constant=constant), patch('solar_forge.retrieval.' + constant, value):
+                with self.assertRaisesRegex(ForgeError, message):
+                    build_index(self.ws, self.cfg)
+                self.assertFalse((self.ws.root / '.forge/rag/index.json').exists())
+
+    def test_custom_cache_inside_source_is_not_indexed(self):
+        cfg = replace(self.cfg, rag=replace(self.cfg.rag, path='references/cache'))
+        self.ws.write('references/cache/copied.md', 'Do not retrieve internal cache files')
+        build_index(self.ws, cfg)
+        self.assertNotIn('references/cache/copied.md', load_index(self.ws, cfg)['manifest']['files'])
+        self.assertEqual(index_status(self.ws, cfg)['status'], 'ready')
+        bad = replace(cfg, rag=replace(cfg.rag, sources=['references/cache']))
+        with self.assertRaisesRegex(ForgeError, 'cannot be a retrieval source'):
+            build_index(self.ws, bad)
+
+    def test_missing_index_is_visible_in_chat_and_preparation(self):
+        provider = TextProvider('Please build the library with /index.')
+        service = ChatService(self.ws, self.cfg, provider)
+        session = service.new()['id']
+        service.send(session, 'billing refunds')
+        self.assertIn('"status": "missing"', provider.calls[0][0])
+        audit = prepare(self.ws, self.cfg, DEFAULT_REQUEST, ScriptedProvider({'questions': []}))
+        self.assertEqual(json.loads(audit.read('context.json'))['retrieval']['status'], 'missing')
+        build_index(self.ws, self.cfg)
+        with self.assertRaisesRegex(ForgeError, 'Retrieval sources'):
+            assert_current(self.ws, self.cfg, audit)
 
     def test_missing_sources_reported_and_invalid_config_rejected(self):
         cfg = replace(self.cfg, rag=replace(self.cfg.rag, sources=['absent']))

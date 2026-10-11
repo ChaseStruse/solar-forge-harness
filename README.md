@@ -82,10 +82,9 @@ Forge walks you through three steps:
 2. **Choose your documents folder.** Enter an existing folder inside the project,
    or let Forge create `docs/` at the project root. Absolute paths inside the
    project work too. Existing documents are kept.
-3. **Choose future document search storage (RAG).** Reserve a local folder
-   (default: `.forge/rag/`) or choose “Set up later.” Forge saves your choice
-   and creates the local folder if selected. Document search and indexing are
-   not implemented yet.
+3. **Choose local document search (RAG).** Enable a local library
+   (default storage: `.forge/rag/`) or choose “Set up later.” After setup, run
+   `forge index` or `/index` in chat to build it. No embedding service is needed.
 
 Setup creates `agentic_audit/requests/default/request.md`, `.forge/config.toml`, and editable guidance in
 `.forge/standards/`. It ends with a list of created or preserved files, your
@@ -131,7 +130,8 @@ stable order. Known credential paths, symlinks, build folders, and dependencies
 are excluded from folder discovery. Collection is limited to 500 documentation
 files and the configured file/context size limits. Missing documentation is
 reported in the context snapshot. Documents are sent to the selected model
-service as context; this does not build a search index.
+service as context. Use `rag.sources` for a separate searchable library instead
+of loading a large reference collection into every prompt.
 
 ## Choose a provider
 
@@ -212,7 +212,10 @@ You can complete the request workflow in this window:
 | `/select NUMBER` | Select a bundle from `/requests` |
 | `/edit-request` | Open the selected request for editing |
 | `/edit FIELD TEXT` | Update `title`, `description`, `technical_details`, or `acceptance_criteria` in a draft |
-| `/context` | Inspect included documents, exclusions, and prompt bytes; warns at 80% of the limit |
+| `/context` | Inspect included documents, retrieval, exclusions, and prompt bytes; warns at 80% of the limit |
+| `/index` | Build or refresh the local reference library |
+| `/search QUERY` | Search reference passages with source citations, without a model call |
+| `/rag` | Show library size, missing sources, and index freshness |
 | `/continue` | Open a linked conversation with a compact handoff, preserving the request, run, and draft |
 | `/request [TITLE]` | Draft a request bundle, one question at a time |
 | `/request show` | Read the current request |
@@ -346,6 +349,72 @@ audit artifacts under your project's version-control and retention policy.
 `state.json` is authoritative; Markdown artifacts are readable views. Events and
 saved calls retain earlier plans even when `plan.md` is replaced.
 
+## Search local documents with RAG
+
+Forge can retrieve relevant passages from a local document library for chat,
+request preparation, and coding. Indexing and keyword search run locally without
+model calls, embedding credentials, or additional dependencies. Retrieved passages
+are sent to your selected model when used as context and saved in the audit.
+
+Enable search in `.forge/config.toml`:
+
+```toml
+[rag]
+storage = "local"
+path = ".forge/rag"
+sources = ["reference", "docs/product"]
+top_k = 5
+max_result_bytes = 12000
+```
+
+Choose existing folders or individual Markdown, UTF-8 text, and reStructuredText
+files (`.md`, `.txt`, `.rst`). Paths must be inside the project. An empty `sources`
+list uses `harness.docs`, preserving compatibility with existing local RAG setup.
+Keep essential rules in `harness.docs`; put larger reference collections only in
+`rag.sources` so they are searched instead of included in full in every prompt.
+Current request attachments remain scoped to their request and are included by
+the existing context collector; other requests' audit folders are not indexed.
+
+Build and explore the library:
+
+```sh
+forge index
+forge index --status
+forge search "refund receipt requirements"
+```
+
+In chat, use `/index`, `/rag`, and `/search refund receipt requirements`. These
+commands make no model calls. Ordinary chat messages automatically retrieve
+passages for the latest message. Preparation retrieves passages for the request;
+discovery and planning receive those passages. During approved coding, the model
+can issue `search_docs` queries to pull more references. Results carry source paths,
+line ranges, document hashes, and excerpts; answers are instructed to cite them.
+Retrieved text is reference data and cannot approve edits or execute commands.
+
+Search ranks matching words using BM25-style scoring. It does not use embeddings,
+understand synonyms, or fetch websites. Specific domain terms usually work better
+than vague questions. Search returns up to `top_k` passages within the serialized
+result budget. Very small budgets can exclude an entire passage. Long source
+lines are split into bounded excerpts that retain their original line number.
+
+Run `/index` or `forge index` again after editing, adding, or removing library
+files or changing RAG settings. Search checks source hashes and refuses to return
+stale excerpts. Missing indexes and missing source paths are shown explicitly.
+Coding runs bind the retrieval settings and corpus fingerprint at preparation;
+changes require a freshly prepared run. Agent file tools cannot edit reference
+sources or the index. A corrupt cache produces an actionable error; remove its
+`index.json` and rebuild, leaving historical audit evidence intact.
+
+The first version supports up to 500 files and 5 MB of source text, within each
+file's `harness.max_file_bytes` limit. Passage text is at most 2,000 UTF-8 bytes,
+queries are capped at 2,000 bytes, and the index is capped at 20 MB. Automatic
+retrieval uses the first 2,000 bytes of the message or request as its query.
+Known secret paths, symlinks, dependencies, build folders, and audit folders are
+excluded. Credentials in otherwise ordinary documents cannot be detected reliably.
+The index contains copied document text; apply the same retention policy as your
+source documents. CLI search evidence is saved under `agentic_audit/document-retrieval/`;
+chat and coding evidence lives in the corresponding run's `retrieval/` directory.
+
 ## Run verification checks
 
 Verification is disabled by default. Add trusted named commands to
@@ -411,7 +480,7 @@ sent to the selected provider and stored in the audit trail. Credentials in
 arbitrarily named files cannot be detected reliably: curate documentation and
 review your audit retention policy. API keys are not written by the adapter.
 
-Streaming, cost accounting, retrieval, OS-isolated verification, Git/deployment
+Streaming, cost accounting, semantic retrieval, OS-isolated verification, Git/deployment
 actions, and optional multi-agent coordination are follow-up work. See the
 [implementation plan](agentic_audit/requests/baseline/implementation-plan.md) and
 [architecture](docs/architecture.md).
