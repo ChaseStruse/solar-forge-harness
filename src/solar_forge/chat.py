@@ -13,6 +13,7 @@ from .providers import Provider, assert_identity, configured_identity
 from .workflow import call
 from .workspace import Workspace, atomic_write
 from .personality import PERSONALITY
+from .prompts import compact_context, prompt_json
 from .progress import read_progress
 
 CHAT_SYSTEM = PERSONALITY + '\n' + '''You are Solar Forge, a helpful coding and project-planning assistant.
@@ -102,7 +103,7 @@ class ChatService:
         context['request_path'] = name
         context['project_request'] = read_request(self.workspace, name) if name and request_path(self.workspace, name).exists() else None
         context['workflow'] = ChatWorkflow(self.workspace, self.config, self.provider, audit, state).context()
-        system = CHAT_SYSTEM + '\nChat commands:\n' + HELP + '\nProject context:\n' + json.dumps(context, ensure_ascii=False)
+        system = CHAT_SYSTEM + '\nChat commands:\n' + '\n'.join(line.strip() for line in HELP.splitlines() if line.startswith('  /')) + '\nProject context:\n' + prompt_json(compact_context(context))
         return context, system
 
     def inspect_context(self, audit: Audit, state: dict) -> str:

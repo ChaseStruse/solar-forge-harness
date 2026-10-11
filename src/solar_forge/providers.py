@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .domain import Config, ForgeError
+from .prompts import prompt_json
 
 
 class Provider(Protocol):
@@ -53,7 +54,7 @@ def local_host(host: str) -> bool:
 
 
 def post_json(url: str, headers: dict, payload: dict, timeout: int) -> dict:
-    request = Request(url, json.dumps(payload).encode(),
+    request = Request(url, prompt_json(payload).encode(),
                       headers={"Content-Type": "application/json", **headers}, method="POST")
     try:
         with build_opener(NoRedirect()).open(request, timeout=timeout) as response:
@@ -146,7 +147,7 @@ class HTTPProvider:
         headers = {'Content-Type': 'application/json'}
         if self.key:
             headers['Authorization'] = f'Bearer {self.key}'
-        request = Request(self.audit_identity['endpoint'], json.dumps(payload).encode(), headers, method='POST')
+        request = Request(self.audit_identity['endpoint'], prompt_json(payload).encode(), headers, method='POST')
         used = 0
         usage = None
         try:
