@@ -141,7 +141,7 @@ class ChatService:
             new = self.new()
             target = self._open(new['id'])
             following = target.load()
-            for key in ('request_path', 'workflow_run', 'request_draft', 'answering'):
+            for key in ('request_path', 'workflow_run', 'request_draft', 'answering', 'guided_workflow'):
                 if key in state:
                     following[key] = state[key]
             following.update(parent_chat=session, title='Continued: ' + state['title'][:55],
@@ -316,7 +316,7 @@ class ChatService:
         parts = message.split(maxsplit=1)
         command = parts[0].lower() if parts else ''
         value = parts[1].strip() if len(parts) > 1 else ''
-        request_commands = {'/prepare', '/edit-request', '/next'}
+        request_commands = {'/start', '/prepare', '/edit-request', '/next'}
         run_commands = {'/plan', '/run', '/discover', '/answer', '/changes', '/approve'}
         if command == '/request' and value == 'show':
             command, value = '/edit-request', ''

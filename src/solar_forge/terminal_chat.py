@@ -98,7 +98,7 @@ class TerminalChat:
                     Label(lambda: self.usage_indicator(), style='class:status'),
                     Label(lambda: display('Working… Ctrl+X requests a stop.' if self.busy else
                                           self.current.get('workflow_hint', '') if self.current else
-                                          'Start: /request or /prepare. Continue: /runs. Help: /help.'),
+                                          'Start: /start. New idea: /request. Resume or retry: /next.'),
                           style='class:workflow'),
                     ConditionalContainer(
                         Frame(Label(lambda: self.activity_text() + ('\n\n' + '\n'.join(self.live_events[-6:]) if self.live_events else ''), style='class:activity'), title='Activity'),
@@ -455,11 +455,11 @@ class TerminalChat:
         choices = []
         if self.current and self.current.get('pending_message'):
             choices.append({'label': 'Retry pending model reply', 'retry': True})
-        elif self.last_failed_command and self.last_failed_command.split()[0] in {'/prepare', '/discover', '/plan'}:
-            retry = '/discover' if self.last_failed_command.split()[0] == '/prepare' else self.last_failed_command
+        elif self.last_failed_command and self.last_failed_command.split()[0] in {'/start', '/next', '/prepare', '/discover', '/plan'}:
+            retry = '/next' if self.last_failed_command.split()[0] in {'/start', '/next', '/prepare', '/discover'} else self.last_failed_command
             choices.append({'label': 'Retry ' + retry, 'command': retry})
         elif self.current and self.current.get('run_status') == 'discovering':
-            choices.append({'label': 'Retry /discover', 'command': '/discover'})
+            choices.append({'label': 'Continue preparation', 'command': '/next'})
         elif self.current and self.current.get('run_status') == 'ready_to_plan':
             choices.append({'label': 'Retry /plan', 'command': '/plan'})
         elif self.current and self.current.get('run_status') in {'planned', 'interrupted', 'executing', 'turn_limit'}:
@@ -529,12 +529,12 @@ class TerminalChat:
             text = ('What are we building?\n\n'
                     'Ask your model for help, or use these actions:\n\n'
                     '  /request   Write a request, one question at a time\n'
-                    '  /prepare   Find questions in the selected request\n'
-                    '  /answer    Record answers (use /ask for model advice)\n'
-                    '  /plan      Create and review a coding plan\n'
+                    '  /start     Prepare your request and build its plan\n'
+                    '             Answer any blocking questions as they appear\n'
+                    '             Review the plan when it is ready\n'
                     '  /approve   Approve this plan and start coding\n'
                     '  /runs      Continue an existing coding run\n'
-                    '  /next      Take the next step; approval is still required\n'
+                    '  /next      Continue or retry the saved step\n'
                     '  /help      See all actions\n\n'
                     'Use /ask TEXT for advice while drafting or answering.\n'
                     'Requests, project guidance, and selected run details go to your model.\n'
@@ -662,7 +662,7 @@ class TerminalChat:
                                else 'Progress saved. Follow the next step above, or ask your model for help.')
                 if self.current.get('command_error'):
                     self.last_failed_command = message
-                if self.current.get('reviewed_plan') and message.split()[0].lower() in {'/plan', '/run'}:
+                if self.current.get('reviewed_plan') and (message.split()[0].lower() in {'/start', '/next', '/plan', '/run', '/answer'} or not message.startswith('/')):
                     self.show_plan()
                 if 'discarded_message' in self.current:
                     # Preserve model-advice semantics even while a wizard is active.
