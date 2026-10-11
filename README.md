@@ -654,8 +654,9 @@ model server can also help. `forge init` creates `.forge/logs`. `/logs` exports 
 (including conversation text, so review it before sharing). It does not collect
 LM Studio server logs or API credentials.
 
-Forge chat colors user messages blue, model replies light gray, and workflow
-results green. Type `/` to open command suggestions, use Up/Down to choose,
+Forge chat uses a cyberpunk palette: midnight panels, neon cyan user messages,
+soft lavender model replies, mint workflow results, amber activity, and magenta
+frame titles and menu selections. Type `/` to open command suggestions, use Up/Down to choose,
 and Tab or Enter to fill a command. The popup shows command descriptions and
 scrolls through longer lists with the arrow keys. Press Enter again to send it. Complete
 commands and command arguments do not trigger suggestions.
