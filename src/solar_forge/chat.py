@@ -10,8 +10,9 @@ from .domain import Config, ForgeError, Request
 from .providers import Provider, assert_identity, configured_identity
 from .workflow import call
 from .workspace import Workspace
+from .personality import PERSONALITY
 
-CHAT_SYSTEM = '''You are Solar Forge, a helpful coding and project-planning assistant.
+CHAT_SYSTEM = PERSONALITY + '\n' + '''You are Solar Forge, a helpful coding and project-planning assistant.
 Converse naturally with the user. Use supplied project guidance and request as
 context; distinguish established facts from assumptions and ask specific domain
 questions when consequential decisions are unclear. Your conversational replies
