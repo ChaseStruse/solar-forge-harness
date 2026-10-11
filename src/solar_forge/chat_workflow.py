@@ -12,12 +12,17 @@ from .providers import Provider, assert_identity, configured_identity
 from .workflow import assert_current, discover, plan, plan_digest, prepare, record_answer
 from .workspace import Workspace
 
+from .retrieval import build_index, index_status, search, record_search, format_result
+
 HELP = '''Work on a request here in chat:
   /requests          List request bundles and latest run status
   /select NUMBER     Select a request from /requests
   /edit-request      Open the selected request for editing
   /edit FIELD TEXT   Edit title, description, technical_details, or acceptance_criteria
   /context           Inspect included context and prompt budget
+  /index             Build or refresh the local document library
+  /search QUERY      Find reference passages with source citations
+  /rag               Inspect document library status
   /continue          Start a linked conversation with a compact saved handoff
   /request           Create a request, one question at a time
   /request show      Read the selected request
@@ -393,6 +398,14 @@ class ChatWorkflow:
             return self.respond(message)
         parts = message.split(maxsplit=1)
         command, value = parts[0].lower(), parts[1].strip() if len(parts) > 1 else ''
+        if command in {'/index', '/search', '/rag'}:
+            if command != '/search' and value:
+                raise ForgeError(f'Use {command} without arguments.')
+            result = (search(self.workspace, self.config, value) if command == '/search' else
+                      build_index(self.workspace, self.config) if command == '/index' else
+                      index_status(self.workspace, self.config))
+            record_search(self.chat, result)
+            return format_result(result)
         if command == '/requests':
             return self.requests()
         if command == '/select':

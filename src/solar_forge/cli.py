@@ -14,6 +14,7 @@ from .requests import current_request, request_name, request_path
 from .setup import create, initialize
 from .workflow import discover, plan, prepare, record_answer
 from .workspace import Workspace
+from .retrieval import build_index, index_status, search, format_result, record_standalone
 
 
 def parser() -> argparse.ArgumentParser:
@@ -26,6 +27,10 @@ def parser() -> argparse.ArgumentParser:
     request = commands.add_parser('request', help='Create a request template')
     request.add_argument('title')
     request.add_argument('--output', help='Must be agentic_audit/requests/<request-name>/request.md')
+    index = commands.add_parser('index', help='Build or inspect the local document library')
+    index.add_argument('--status', action='store_true', help='Inspect freshness without rebuilding')
+    lookup = commands.add_parser('search', help='Search local reference passages without a model call')
+    lookup.add_argument('query', help='Quoted search query')
     chat = commands.add_parser('chat', help='Open a terminal chat interface with the configured model')
     chat.add_argument('--provider', choices=['openai', 'anthropic', 'ollama', 'compatible'])
     chat.add_argument('--model')
@@ -114,6 +119,14 @@ def main(argv=None) -> int:
                     answer_interactively(audit)
             return 0
         config = Config.load(workspace.path('.forge/config.toml'))
+        workspace.max_file_bytes = config.max_file_bytes
+        if args.command in {'index', 'search'}:
+            result = (search(workspace, config, args.query) if args.command == 'search' else
+                      index_status(workspace, config) if args.status else build_index(workspace, config))
+            evidence = record_standalone(workspace, result)
+            print(format_result(result))
+            print(f'Evidence: {evidence}')
+            return 0 if result['status'] == 'ready' else 1
         # Changing provider implies its default endpoint/key; explicit config still
         # applies when only the model changes.
         if args.provider and args.provider != config.kind:

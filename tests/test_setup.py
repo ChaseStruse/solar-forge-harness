@@ -58,7 +58,7 @@ class SetupTests(unittest.TestCase):
                 self.assertEqual((config.rag.storage, config.rag.path), ('local', '.forge/rag'))
                 self.assertTrue((root / '.forge/rag').is_dir())
                 self.assertEqual(collect(Workspace(root), config)['documents']['project notes/overview.md'], 'Project goals')
-                self.assertIn('not active', out)
+                self.assertIn('run forge index', out)
                 if key:
                     self.assertIn('API key variable name', str(prompt.call_args_list))
 
@@ -127,7 +127,7 @@ class SetupTests(unittest.TestCase):
     def test_old_config_works_and_new_rag_settings_are_validated(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'config.toml'
-            old = CONFIG_TEMPLATE.split('# Reserved for future')[0]
+            old = CONFIG_TEMPLATE.split('# Local passage search')[0]
             path.write_text(old)
             self.assertEqual(Config.load(path).rag.storage, 'deferred')
             for settings in ('storage = "unknown"', 'storage = "local"\npath = "../outside"',

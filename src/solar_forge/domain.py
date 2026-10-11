@@ -44,10 +44,13 @@ docs = ["README.md", "AGENTS.md", ".forge/standards/coding.md", ".forge/standard
 # timeout = 120
 # max_output_bytes = 20000
 
-# Reserved for future document search; no index is built yet.
+# Local passage search. Run forge index after enabling or changing sources.
 [rag]
 storage = "deferred" # deferred | local
-path = ""
+path = "" # e.g. ".forge/rag" for local storage
+sources = [] # Empty uses harness.docs; separate reference folders avoid full prompt inclusion.
+top_k = 5
+max_result_bytes = 12000
 '''
 
 
@@ -89,6 +92,25 @@ class Request:
 class RagConfig:
     storage: str = "deferred"
     path: str = ""
+    sources: list[str] = field(default_factory=list)
+    top_k: int = 5
+    max_result_bytes: int = 12000
+
+    def snapshot(self) -> dict:
+        if self.storage not in ('deferred', 'local'):
+            raise ForgeError('rag.storage must be deferred or local.')
+        if not isinstance(self.path, str):
+            raise ForgeError('rag.path must be a string.')
+        if self.storage == 'local' and (not self.path or Path(self.path).is_absolute()
+                or '..' in Path(self.path).parts or Path(self.path) == Path('.')):
+            raise ForgeError('rag.path must be a folder inside the project for local storage.')
+        if not isinstance(self.sources, list) or any(not isinstance(p, str) or not p.strip() for p in self.sources):
+            raise ForgeError('rag.sources must be a list of project-relative paths.')
+        if type(self.top_k) is not int or not 1 <= self.top_k <= 20:
+            raise ForgeError('rag.top_k must be an integer from 1 to 20.')
+        if type(self.max_result_bytes) is not int or not 512 <= self.max_result_bytes <= 100000:
+            raise ForgeError('rag.max_result_bytes must be an integer from 512 to 100000.')
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -151,13 +173,6 @@ class Config:
             raise ForgeError("Provider must be openai, anthropic, ollama, or compatible.")
         if not isinstance(config.docs, list) or not all(isinstance(p, str) for p in config.docs):
             raise ForgeError("harness.docs must be a list of project-relative paths.")
-        if not isinstance(config.rag.storage, str) or config.rag.storage not in {"deferred", "local"}:
-            raise ForgeError("rag.storage must be deferred or local.")
-        if not isinstance(config.rag.path, str):
-            raise ForgeError("rag.path must be a string.")
-        if config.rag.storage == "local" and (not config.rag.path or Path(config.rag.path).is_absolute()
-                                             or ".." in Path(config.rag.path).parts
-                                             or Path(config.rag.path) == Path(".")):
-            raise ForgeError("rag.path must be a folder inside the project for local storage.")
+        config.rag.snapshot()
         config.verification.snapshot()
         return config

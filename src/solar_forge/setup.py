@@ -135,9 +135,9 @@ def guided_config(workspace: Workspace) -> Config:
         print('We will use docs/ at the project root, creating it if needed.')
 
     print('\n3 of 3: Document search storage (RAG)')
-    print('RAG means finding relevant documents for the model. Document search is not available yet.')
-    print('This choice reserves storage for future setup; it does not build a search index.')
-    print('  1. Reserve a local folder\n  2. Set up later')
+    print('RAG finds relevant passages from local documents for your model, with source citations.')
+    print('After setup, run forge index (or /index in chat) to build the document library.')
+    print('  1. Enable local document search\n  2. Set up later')
     storage = choice('Choose a number', ('1', '2'), '2')
     rag = RagConfig()
     if storage == '1':
@@ -177,7 +177,7 @@ def initialize(workspace: Workspace, *, interactive: bool) -> None:
             target = workspace.path(name, write=True, internal=name.startswith('.forge/rag'))
             existed = target.exists()
             target.mkdir(parents=True, exist_ok=True)
-            print(f'{"Kept existing" if existed else "Created"} future search storage folder: {name}/')
+            print(f'{"Kept existing" if existed else "Created"} search storage folder: {name}/')
     create(workspace, DEFAULT_REQUEST, REQUEST_TEMPLATE, internal=True)
     for name, text in bundled_guidance().items():
         create(workspace, '.forge/standards/' + name.split('/')[-1], text, internal=True)
@@ -188,7 +188,7 @@ def initialize(workspace: Workspace, *, interactive: bool) -> None:
     print('Settings: .forge/config.toml')
     print('Project guidance: .forge/standards/')
     print('Documents: ' + (config.docs[-1] + '/' if created_config else ', '.join(config.docs)))
-    print('Document search: ' + (f'local folder {config.rag.path} reserved (not active)' if config.rag.storage == 'local'
+    print('Document search: ' + (f'local folder {config.rag.path} enabled; run forge index to build or refresh' if config.rag.storage == 'local'
                                 else 'set up later (not active)'))
     if config.model == 'CHANGE_ME' or not config.model.strip():
         print('\nBefore chatting: set provider.model in .forge/config.toml to your model name.')
