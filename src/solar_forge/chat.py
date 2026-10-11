@@ -254,6 +254,46 @@ class ChatService:
                 audit.event('chat_command_finished')
         return self.get(session) | {'command_error': error}
 
+    def request_options(self, message: str, session: str | None = None) -> list[dict] | None:
+        """Return picker choices only when an implicit request/run is missing."""
+        parts = message.split(maxsplit=1)
+        command = parts[0].lower() if parts else ''
+        value = parts[1].strip() if len(parts) > 1 else ''
+        request_commands = {'/prepare', '/edit-request', '/next'}
+        run_commands = {'/plan', '/run', '/discover', '/answer', '/changes', '/approve'}
+        if command == '/request' and value == 'show':
+            command, value = '/edit-request', ''
+        if command not in request_commands | run_commands:
+            return None
+        if value and command not in {'/answer', '/changes'}:
+            return None
+        audit = self._open(session) if session else None
+        state = audit.load() if audit else {}
+        if state.get('pending_message') or state.get('request_draft') or state.get('answering'):
+            return None
+        if state.get('workflow_run') or (command in request_commands and state.get('request_path')):
+            return None
+        workflow = ChatWorkflow(self.workspace, self.config, self.provider, audit, state)
+        options = workflow.request_options()
+        # Request-only commands already resolve a sole bundle without ambiguity.
+        if command in request_commands and len(options) == 1:
+            return None
+        return options
+
+    def choose_request(self, session: str, name: str) -> dict:
+        audit = self._open(session)
+        with audit.lock():
+            state = audit.load()
+            if state.get('pending_message'):
+                raise ForgeError('Discard or retry the pending message before selecting a request.')
+            workflow = ChatWorkflow(self.workspace, self.config, self.provider, audit, state)
+            result = workflow.choose_request(name)
+            state['messages'].append({'role': 'assistant', 'content': 'Forge workflow\n' + result})
+            state['updated_at'] = now()
+            audit.save(state)
+            self._transcript(audit, state)
+        return self.get(session)
+
     def logs(self, session: str) -> dict:
         """Export diagnostics without calling the model, even after a failed reply."""
         audit = self._open(session)

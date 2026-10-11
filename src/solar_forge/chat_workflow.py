@@ -124,7 +124,7 @@ class ChatWorkflow:
             self.state['request_path'] = audit.load()['request_path']
             return audit
         if not self.state.get('workflow_run'):
-            raise ForgeError('Choose a run with /runs and /use NUMBER, or start one with /prepare.')
+            raise ForgeError('This request has no selected run yet. Use /prepare to find questions before planning, or /runs to choose an existing run.')
         return Audit.open(self.workspace, self.state['workflow_run'])
 
     def check_model(self, audit: Audit) -> None:
@@ -182,6 +182,40 @@ class ChatWorkflow:
         return 'Coding runs:\n\n' + '\n'.join(
             f'{i}. {state["title"]} — {state["status"]}\n   {relative}'
             for i, (relative, state) in enumerate(runs, 1)) + '\n\nUse /use NUMBER to continue a run.'
+
+    def request_options(self) -> list[dict]:
+        latest = {}
+        for audit in sorted(Audit.discover(self.workspace), key=lambda a: a.load()['created_at']):
+            state = audit.load()
+            if state.get('run_kind') != 'chat' and state.get('request_path'):
+                latest[state['request_path']] = (audit, state)
+        options = []
+        for path in sorted(self.workspace.path(ROOT, internal=True).glob('*/request.md')):
+            name = path.relative_to(self.workspace.root).as_posix()
+            try:
+                title = Request.parse(read_request(self.workspace, name)).title
+            except (ForgeError, OSError):
+                continue
+            run = latest.get(name)
+            options.append({'path': name, 'title': title,
+                            'status': run[1]['status'] if run else 'not prepared',
+                            'run': run[0].path.relative_to(self.workspace.root).as_posix() if run else None})
+        return options
+
+    def choose_request(self, name: str) -> str:
+        if self.state.get('request_draft') or self.state.get('answering'):
+            raise ForgeError('Finish or /cancel the current prompt before selecting another request.')
+        choice = next((item for item in self.request_options() if item['path'] == name), None)
+        if choice is None:
+            raise ForgeError('That request is no longer available. Reopen the request picker.')
+        self.state['request_path'] = name
+        for key in ('workflow_run', 'reviewed_plan', 'answering'):
+            self.state.pop(key, None)
+        if choice['run']:
+            self.selected(choice['run'])
+        self.chat.event('chat_request_selected', request_path=name, run=choice['run'])
+        return f'Selected {choice["title"]}. ' + (
+            'Existing run selected.' if choice['run'] else 'Not prepared yet. Use /prepare to find questions before planning.')
 
     def requests(self, value: str = '') -> str:
         if value:

@@ -154,3 +154,26 @@ class ChatFeatureTests(unittest.TestCase):
         again = self.command('/logs')
         self.assertNotEqual(result['logs_path'], again['logs_path'])
         self.assertTrue((self.ws.root / result['logs_path']).exists())
+
+    def test_request_picker_options_resume_latest_run_without_approval(self):
+        from solar_forge.domain import Request
+        self.assertIsNone(self.service.request_options('/prepare', self.session))
+        self.assertEqual(len(self.service.request_options('/plan', self.session)), 1)
+        run = Audit.create(self.ws, Request.parse(REQUEST))
+        state = run.load()
+        state.update(request_path=DEFAULT_REQUEST, status='ready_to_plan')
+        run.save(state)
+        options = self.service.request_options('/plan', self.session)
+        self.assertEqual(options[0]['status'], 'ready_to_plan')
+        selected = self.service.choose_request(self.session, options[0]['path'])
+        self.assertEqual(selected['workflow_run'], options[0]['run'])
+        self.assertIsNone(self.service.request_options('/plan', self.session))
+        self.assertNotIn('reviewed_plan', Audit.open(self.ws, self.session).load())
+        self.assertFalse(run.load().get('approved_plan'))
+        self.assertEqual(self.service.provider.calls, [])
+
+    def test_request_picker_does_not_intercept_explicit_arguments_or_drafts(self):
+        self.assertIsNone(self.service.request_options('/prepare ' + DEFAULT_REQUEST, self.session))
+        self.assertIsNone(self.service.request_options('/plan 1', self.session))
+        self.command('/request New idea')
+        self.assertIsNone(self.service.request_options('/plan', self.session))
