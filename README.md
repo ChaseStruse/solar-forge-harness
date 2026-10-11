@@ -719,3 +719,5 @@ stage and stops for human input or review; it never approves development.
 starts fresh preparation explicitly, for example after editing a request or project
 guidance. Finished runs show their saved results. `/prepare`, `/discover`, `/answer`,
 `/plan`, and `/run` remain available as advanced individual-stage controls.
+
+See the [Forge chat user flow](docs/chat-user-flow.md) for the everyday commands, Continue action, and workflow diagram.
