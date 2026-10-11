@@ -91,10 +91,10 @@ class ChatService:
     def list(self) -> list[dict]:
         sessions = []
         for audit in Audit.discover(self.workspace):
-            session = audit.path.relative_to(self.workspace.root).as_posix()
-            if audit.load().get('run_kind') == 'chat':
-                data = self.get(session)
-                sessions.append({k: data[k] for k in ('id', 'title', 'provider', 'model', 'updated_at')})
+            state = audit.load()
+            if state.get('run_kind') == 'chat':
+                sessions.append({k: state[k] for k in ('title', 'provider', 'model', 'updated_at')} |
+                                {'id': audit.path.relative_to(self.workspace.root).as_posix()})
         return sorted(sessions, key=lambda s: s['updated_at'], reverse=True)
 
     def prompt_context(self, audit: Audit, state: dict) -> tuple[dict, str]:
@@ -284,10 +284,16 @@ class ChatService:
     def history(self, query: str = '') -> list[dict]:
         results = []
         for entry in self.list():
-            chat = self.get(entry['id'])
+            if not query:
+                results.append(entry | {'snippet': '', 'kind': 'chat'})
+                if len(results) >= 50:
+                    return results
+                continue
+            audit = self._open(entry['id'])
+            chat = audit.load()
             text = '\n'.join(message['content'] for message in chat['messages'])
             text += '\n' + (chat.get('pending_message') or '')
-            event_path = self._open(entry['id']).path / 'events.jsonl'
+            event_path = audit.path / 'events.jsonl'
             if event_path.is_file():
                 for line in event_path.read_text().splitlines():
                     try:
@@ -303,7 +309,7 @@ class ChatService:
                 match = next((line for line in text.splitlines() if query and query.casefold() in line.casefold()), '')
                 results.append(entry | {'snippet': match[:160], 'kind': 'chat'})
             if len(results) >= 50:
-                break
+                return results
         workflow = ChatWorkflow(self.workspace, self.config, self.provider, None, {})
         for choice in workflow.request_options():
             text = read_request(self.workspace, choice['path'])

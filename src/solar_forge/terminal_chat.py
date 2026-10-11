@@ -18,6 +18,7 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, Label, TextArea
 
 from .chat import ChatService
+from .chat_stream import StreamDisplay
 from .chat_workflow import HELP, ADVANCED_HELP, PRIMARY_COMMANDS, continue_action
 from .domain import ForgeError
 from .progress import with_progress, format_progress
@@ -79,6 +80,10 @@ class TerminalChat:
         self.plan_visible = False
         self.live_events = []
         self.conversation_styles = []
+        self._transcript_key = None
+        self._transcript_text = ''
+        self._transcript_styles = []
+        self._rendered_session = None
         self.notice = 'Enter sends. Alt+Enter adds a line. /help lists actions.'
         self.history = TextArea(read_only=True, scrollbar=True, wrap_lines=False, width=Dimension.exact(28),
                                 style='class:history')
@@ -103,7 +108,8 @@ class TerminalChat:
                           style='class:workflow'),
                     ConditionalContainer(
                         Frame(Label(lambda: self.activity_text() + ('\n\n' + '\n'.join(self.live_events[-6:]) if self.live_events else ''), style='class:activity'), title='Activity'),
-                        filter=Condition(lambda: self.activity is not None or self.busy)),
+                        filter=Condition(lambda: self.busy or (self.activity is not None and not self.plan_visible
+                                                              and self.action_choices is None and self.request_choices is None))),
                     ConditionalContainer(Frame(self.request_picker, title='Choose a request · ↑/↓ select · Enter confirm · Esc cancel'),
                                          filter=Condition(lambda: self.request_choices is not None)),
                     ConditionalContainer(Frame(self.plan_screen, title='Plan review · Tab to scroll · /approve starts coding · Esc closes'), filter=Condition(lambda: self.plan_visible)),
@@ -567,26 +573,48 @@ class TerminalChat:
                     'Requests, project guidance, and selected run details go to your model.\n'
                     'Your conversation and progress are saved in agentic_audit.')
         else:
-            text = '\n\n'.join(('You' if m['role'] == 'user' else 'Forge') + '\n' + display(m['content'])
-                               for m in self.current['messages'])
-            if self.current['pending_message']:
-                text += '\n\nYou (reply pending)\n' + display(self.current['pending_message'])
+            key = (self.current['id'], tuple((m['role'], m['content']) for m in self.current['messages']),
+                   self.current['pending_message'])
+            if key != self._transcript_key:
+                blocks, styles = [], []
+                for role, content in key[1]:
+                    style = ('class:user' if role == 'user' else
+                             'class:workflow-text' if content.startswith('Forge workflow') else 'class:assistant')
+                    block = ('You' if role == 'user' else 'Forge') + '\n' + display(content)
+                    if blocks:
+                        styles.append('class:assistant')
+                    blocks.append(block)
+                    styles.extend([style] * len(block.split('\n')))
+                if key[2]:
+                    block = 'You (reply pending)\n' + display(key[2])
+                    if blocks:
+                        styles.append('class:assistant')
+                    blocks.append(block)
+                    styles.extend(['class:user'] * len(block.split('\n')))
+                self._transcript_key = key
+                self._transcript_text = '\n\n'.join(blocks)
+                self._transcript_styles = styles
+            text = self._transcript_text
+        styles = list(self._transcript_styles) if self.current else []
         if self.partial_reply:
-            text += '\n\nForge (streaming; not yet complete)\n' + display(self.partial_reply)
-        styles = []
-        if self.current:
-            for index, message in enumerate(self.current['messages']):
-                if index:
-                    styles.append('class:assistant')
-                role = ('class:user' if message['role'] == 'user' else
-                        'class:workflow-text' if message['content'].startswith('Forge workflow') else 'class:assistant')
-                block = ('You' if message['role'] == 'user' else 'Forge') + '\n' + display(message['content'])
-                styles.extend([role] * len(block.split('\n')))
-            if self.current['pending_message']:
-                styles.extend(['class:user'] * (2 + len(display(self.current['pending_message']).split('\n'))))
+            block = 'Forge (streaming; not yet complete)\n' + display(self.partial_reply)
+            if text:
+                text += '\n\n'
+                styles.append('class:assistant')
+            text += block
+            styles.extend(['class:assistant'] * len(block.split('\n')))
         self.conversation_styles = styles
-        self.conversation.text = text
-        self.conversation.buffer.cursor_position = len(text) if self.current else 0
+        session = self.current['id'] if self.current else None
+        old_text = self.conversation.text
+        cursor = self.conversation.buffer.cursor_position
+        follow = session != self._rendered_session or cursor == len(old_text)
+        if old_text != text:
+            scroll = self.conversation.window.vertical_scroll
+            position = len(text) if follow and self.current else min(cursor, len(text))
+            self.conversation.buffer.set_document(Document(text, position), bypass_readonly=True)
+            if not follow:
+                self.conversation.window.vertical_scroll = scroll
+        self._rendered_session = session
         self.app.invalidate()
 
     async def send(self, *, retry: bool = False, skip_picker: bool = False) -> None:
@@ -662,19 +690,19 @@ class TerminalChat:
                 entry = display(snapshot.get('updated_at', '')[11:19] + ' · ' + snapshot.get('action', 'Working'))
                 if not self.live_events or self.live_events[-1] != entry:
                     self.live_events.append(entry)
+                    del self.live_events[:-6]
                 self.app.invalidate()
         def on_progress(snapshot):
             loop.call_soon_threadsafe(update_activity, snapshot)
         def append_chunk(chunk):
             self.partial_reply += chunk
             self.render()
-        def on_chunk(chunk):
-            loop.call_soon_threadsafe(append_chunk, chunk)
+        stream_display = StreamDisplay(loop, append_chunk)
         self.notice = ('Coding… Your progress and changes are saved in the run audit.' if message == '/approve' else
                        'Working on your request…' if command else 'Your model is thinking…')
         try:
             if self.current is None:
-                self.current = self.service.new()
+                self.current = await asyncio.to_thread(self.service.new)
             if not retry and not command:
                 self.current['pending_message'] = question if asking else message
             if not retry:
@@ -699,7 +727,7 @@ class TerminalChat:
 
             else:
                 self.current = await asyncio.to_thread(with_progress, on_progress, self.service.send, self.current['id'],
-                                                      None if retry else question if asking else message, retry=retry, on_chunk=on_chunk,
+                                                      None if retry else question if asking else message, retry=retry, on_chunk=stream_display.push,
                                                       cancelled=self.stop_requested.is_set)
                 self.notice = 'Reply saved. Enter sends your next message.'
         except (ForgeError, OSError) as exc:
@@ -716,6 +744,7 @@ class TerminalChat:
             if self.current:
                 self.current = self.service.get(self.current['id'])
         finally:
+            stream_display.close()
             if self.current:
                 if not self.current.get('reviewed_plan'):
                     self.plan_visible = False
