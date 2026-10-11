@@ -131,6 +131,26 @@ class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(provider.calls, [])
             self.assertIn('/approve', ui.current['workflow_hint'])
 
+    async def test_prepare_picker_with_unused_default_template_and_one_valid_request(self):
+        from solar_forge.domain import REQUEST_TEMPLATE
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            workspace = Workspace(Path(tmp))
+            write_request(workspace, DEFAULT_REQUEST, REQUEST_TEMPLATE)
+            actual = 'agentic_audit/requests/calculator/request.md'
+            write_request(workspace, actual, REQUEST)
+            provider = TextProvider(json.dumps({'questions': []}))
+            ui = TerminalChat(ChatService(workspace, Config(model='test'), provider), input=pipe, output=DummyOutput())
+            ui.composer.text = '/prepare'
+            await ui.send()
+            self.assertEqual(len(ui.request_choices), 1)
+            self.assertEqual(ui.request_choices[0]['path'], actual)
+            self.assertEqual(provider.calls, [])
+            await ui.accept_request_choice()
+            state = Audit.open(workspace, ui.current['workflow_run']).load()
+            self.assertEqual(state['request_path'], actual)
+            self.assertEqual(state['status'], 'ready_to_plan')
+            self.assertNotIn('Multiple requests exist', ui.conversation.text)
+
     async def test_discard_pending_returns_editable_advice_during_request_draft(self):
         with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
             service = ChatService(Workspace(Path(tmp)), Config(model='test', max_prompt_bytes=100), TextProvider())

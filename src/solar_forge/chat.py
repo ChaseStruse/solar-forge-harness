@@ -278,7 +278,15 @@ class ChatService:
         options = workflow.request_options()
         # Request-only commands already resolve a sole bundle without ambiguity.
         if command in request_commands and len(options) == 1:
-            return None
+            try:
+                # The resolver also counts unfinished templates omitted from
+                # the picker. Only bypass the menu if it can resolve the path.
+                resolved = current_request(self.workspace)
+            except ForgeError:
+                pass
+            else:
+                if resolved == options[0]['path']:
+                    return None
         return options
 
     def choose_request(self, session: str, name: str) -> dict:
