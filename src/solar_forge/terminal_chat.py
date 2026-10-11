@@ -18,7 +18,7 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, Label, TextArea
 
 from .chat import ChatService
-from .chat_workflow import HELP
+from .chat_workflow import HELP, ADVANCED_HELP, PRIMARY_COMMANDS, continue_action
 from .domain import ForgeError
 from .progress import with_progress, format_progress
 
@@ -33,10 +33,10 @@ def display(text: str) -> str:
 
 
 class SlashCompleter(Completer):
-    commands = list(dict.fromkeys(['/request', *re.findall(r'^  (/[^ ]+)', HELP, re.M)]))
+    commands = list(dict.fromkeys(['/request', *re.findall(r'^  (/[^ ]+)', HELP + ADVANCED_HELP, re.M)]))
 
     descriptions = {}
-    for line in HELP.splitlines():
+    for line in (HELP + ADVANCED_HELP).splitlines():
         if line.startswith('  /'):
             descriptions.setdefault(line.strip().split()[0], re.split(r' {2,}', line.strip())[-1])
 
@@ -44,7 +44,7 @@ class SlashCompleter(Completer):
         text = document.text_before_cursor
         if text in self.commands or not text.startswith('/') or any(char.isspace() for char in text):
             return
-        for command in self.commands:
+        for command in (PRIMARY_COMMANDS if text == '/' else self.commands):
             if command.startswith(text) and command != text:
                 yield Completion(command, start_position=-len(text), display_meta=self.descriptions.get(command, ''))
 
@@ -94,6 +94,7 @@ class TerminalChat:
             ConditionalContainer(Frame(self.history, title='Saved chats'),
                                  filter=Condition(lambda: self.app.output.get_size().columns >= 85)),
             HSplit([Frame(self.conversation, title=lambda: display(self.current['title']) if self.current else 'New chat'),
+                    Label(lambda: 'F2 Continue · ' + continue_action(self.current)[0], style='class:workflow'),
                     Label(lambda: self.context_indicator(), style='class:workflow'),
                     Label(lambda: self.usage_indicator(), style='class:status'),
                     Label(lambda: display('Working… Ctrl+X requests a stop.' if self.busy else
@@ -161,6 +162,12 @@ class TerminalChat:
         keys = KeyBindings()
         idle = Condition(lambda: not self.busy and self.request_choices is None and self.action_choices is None)
         picking = Condition(lambda: self.request_choices is not None and not self.busy)
+
+        @keys.add('f2', filter=idle, eager=True)
+        def continue_menu(event):
+            label, command = continue_action(self.current)
+            self.show_actions('Continue', [{'label': label, 'command': command}] if command else
+                              [{'label': label, 'command': ''}])
 
         actions = Condition(lambda: self.action_choices is not None and not self.busy)
 
@@ -444,7 +451,7 @@ class TerminalChat:
             self.open_session(action['open'])
         elif action.get('edit'):
             self.composer.buffer.set_document(Document(action['edit'], len(action['edit'])), bypass_readonly=True)
-            self.notice = 'Enter the value, then press Enter to save.'
+            self.notice = 'Complete the command if needed, then press Enter.'
         elif action.get('retry'):
             await self.send(retry=True)
         else:
@@ -482,7 +489,11 @@ class TerminalChat:
     async def local_command(self, message):
         parts = message.split(maxsplit=1)
         command, value = parts[0].lower(), parts[1] if len(parts) > 1 else ''
-        if command == '/settings':
+        if command == '/advanced':
+            self.show_actions('Advanced tools', [{'label': item + ' · ' + SlashCompleter.descriptions.get(item, ''), 'edit': item}
+                                                for item in SlashCompleter.commands if item not in PRIMARY_COMMANDS])
+            self.composer.text = ''
+        elif command == '/settings':
             if value:
                 result = await asyncio.to_thread(self.service.settings, self.current['id'] if self.current else None, value)
                 if result['new_chat_required']:
@@ -566,7 +577,7 @@ class TerminalChat:
         if self.busy or self.request_choices is not None or self.action_choices is not None:
             return
         message = self.composer.text.strip()
-        if not retry and message and message.split(maxsplit=1)[0].lower() in {'/settings', '/history', '/recover', '/review'}:
+        if not retry and message and message.split(maxsplit=1)[0].lower() in {'/settings', '/history', '/recover', '/review', '/advanced'}:
             self.busy = True
             try:
                 await self.local_command(message)

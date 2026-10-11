@@ -198,7 +198,8 @@ class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
                 screen = ui.app.renderer._last_screen
                 rendered = '\n'.join(''.join(cell.char for _, cell in sorted(row.items())) for _, row in sorted(screen.data_buffer.items()))
                 self.assertIn('/request', rendered)
-                self.assertIn('/requests', rendered)
+                self.assertIn('/start', rendered)
+                self.assertNotIn('/discover', rendered)
                 self.assertIsNone(ui.current)
                 pipe.send_text('\x1b[B')
                 await asyncio.sleep(.05)

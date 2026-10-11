@@ -16,7 +16,7 @@ from .retrieval import build_index, index_status, search, record_search, format_
 
 from .progress import read_progress, format_progress
 
-HELP = '''Normal flow: /start → answer any questions → review plan → /approve.
+ADVANCED_HELP = '''Normal flow: /start → answer any questions → review plan → /approve.
 Use /next to continue or retry. Advanced stage commands remain available.
 
 Work on a request here in chat:
@@ -62,6 +62,49 @@ Use Up/Down and Enter to select, or Escape to cancel. A sole request resolves
 automatically for request-only actions. Requests without a run need /prepare first.
 Paths with spaces can be wrapped in quotes. Commands act on the selected run.
 Model replies cannot approve a plan or execute commands.'''
+
+PRIMARY_COMMANDS = ('/request', '/start', '/next', '/approve', '/ask', '/changes',
+                    '/status', '/history', '/settings', '/recover', '/logs', '/help', '/advanced')
+HELP = """Understand → Review → Develop → Check
+
+  /request           Describe a new task
+  /start             Choose a request and prepare its plan
+  /next              Continue or retry the saved step
+  /approve           Start development after reviewing the plan
+  /ask TEXT          Ask for advice
+  /changes           Check the saved edits
+  /status            See results and recorded checks
+  /history [QUERY]   Find previous work
+  /settings          Adjust model and limits
+  /recover           Choose a recovery action
+  /logs              Export diagnostics
+  /help              Show everyday actions
+  /advanced          Show individual stages and other tools
+
+F2 opens a labeled Continue action. Approval always requires /approve.
+Type / for everyday commands; type a command prefix to find advanced tools.
+"""
+
+
+def continue_action(state: dict | None) -> tuple[str, str]:
+    """Describe the next safe action without implicitly approving development."""
+    state = state or {}
+    if state.get('request_draft'):
+        if state['request_draft']['stage'] == 'review':
+            return 'Save your request', '/save-request'
+        return 'Answer the request prompt', ''
+    if state.get('answering') or state.get('run_status') == 'awaiting_answers':
+        return 'Answer a question', '/answer'
+    if state.get('reviewed_plan') or state.get('run_status') in {'planned', 'interrupted', 'executing'}:
+        return 'Review the plan', '/review'
+    if state.get('run_status') in {'review_required', 'completed'}:
+        return 'Check development results', '/status'
+    if state.get('run_status') == 'discovering':
+        return 'Retry preparation', '/next'
+    if state.get('run_status') == 'ready_to_plan':
+        return 'Build the plan', '/next'
+    return 'Choose a request and start', '/start'
+
 
 NEXT = {
     'discovering': 'Preparation did not finish. Use /discover to retry.',
@@ -514,6 +557,8 @@ class ChatWorkflow:
             return self.edit_field(value)
         if command == '/help':
             return HELP
+        if command == '/advanced':
+            return ADVANCED_HELP
         if command == '/cancel':
             for key in ('request_draft', 'answering', 'reviewed_plan'):
                 self.state.pop(key, None)
