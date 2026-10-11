@@ -296,6 +296,17 @@ You can complete the request workflow in this window:
 | `/cancel` | Leave request drafting, question answering, or plan review |
 | `/help` | Show all available actions |
 
+In Forge chat, `/plan`, `/run`, `/discover`, `/answer`, `/changes`, and `/approve`
+open a request picker when no run is selected. `/prepare`, `/edit-request`,
+`/request show`, and `/next` also open it when the request is ambiguous. Use
+**Up/Down** to choose a request, **Enter** to confirm, or **Escape** to cancel.
+Each entry shows the request title and latest run status. Selecting a request
+resumes its latest coding run and continues your command. If it has no run yet,
+the composer offers `/prepare` first. Choosing a request for `/approve` displays
+the plan for review; enter `/approve` again after reviewing it to start coding.
+Explicit paths and existing selections still work, and a sole request resolves
+automatically for request-only commands.
+
 To continue an existing run, use `/runs`, then `/use` with its displayed
 number. You can then enter `/plan`, ask questions about the plan, and enter
 `/approve` to start coding. Run paths also work with `/use`; `/plan`, `/run`,

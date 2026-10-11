@@ -49,6 +49,9 @@ HELP = '''Work on a request here in chat:
 
 Ordinary messages go to your model, except while drafting a request or recording
 an answer. Use /ask then if you want advice instead of saving an answer.
+In Forge chat, commands needing a missing request/run show a request picker.
+Use Up/Down and Enter to select, or Escape to cancel. A sole request resolves
+automatically for request-only actions. Requests without a run need /prepare first.
 Paths with spaces can be wrapped in quotes. Commands act on the selected run.
 Model replies cannot approve a plan or execute commands.'''
 

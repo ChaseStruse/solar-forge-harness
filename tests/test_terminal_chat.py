@@ -111,6 +111,26 @@ class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(state['status'], 'ready_to_plan')
             self.assertEqual(len(provider.calls), 1)
 
+    async def test_approval_picker_opens_review_without_starting_coding(self):
+        from solar_forge.workflow import prepare, plan
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            workspace = Workspace(Path(tmp))
+            write_request(workspace, DEFAULT_REQUEST, REQUEST)
+            provider = TextProvider(json.dumps({'questions': []}), json.dumps({'plan': '# Plan\nInspect project.'}))
+            config = Config(model='test')
+            run = prepare(workspace, config, DEFAULT_REQUEST, provider)
+            plan(workspace, config, run, provider)
+            provider.calls.clear()
+            ui = TerminalChat(ChatService(workspace, config, provider), input=pipe, output=DummyOutput())
+            ui.composer.text = '/approve'
+            await ui.send()
+            self.assertIsNotNone(ui.request_choices)
+            await ui.accept_request_choice()
+            self.assertEqual(run.load()['status'], 'planned')
+            self.assertFalse(run.load().get('approved_plan'))
+            self.assertEqual(provider.calls, [])
+            self.assertIn('/approve', ui.current['workflow_hint'])
+
     async def test_discard_pending_returns_editable_advice_during_request_draft(self):
         with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
             service = ChatService(Workspace(Path(tmp)), Config(model='test', max_prompt_bytes=100), TextProvider())
