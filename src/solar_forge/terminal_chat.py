@@ -36,7 +36,7 @@ class SlashCompleter(Completer):
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
-        if not text.startswith('/') or any(char.isspace() for char in text):
+        if text in self.commands or not text.startswith('/') or any(char.isspace() for char in text):
             return
         for command in self.commands:
             if command.startswith(text) and command != text:

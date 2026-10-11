@@ -151,6 +151,37 @@ class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(state['status'], 'ready_to_plan')
             self.assertNotIn('Multiple requests exist', ui.conversation.text)
 
+    async def test_keyboard_slash_autofill_requires_separate_send(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            provider = TextProvider()
+            ui = TerminalChat(ChatService(Workspace(Path(tmp)), Config(model='test'), provider), input=pipe, output=WideOutput())
+            task = asyncio.create_task(ui.run())
+            try:
+                await asyncio.sleep(.05)
+                pipe.send_text('/r')
+                for _ in range(100):
+                    if ui.composer.buffer.complete_state:
+                        break
+                    await asyncio.sleep(.01)
+                self.assertIsNotNone(ui.composer.buffer.complete_state)
+                pipe.send_text('\t')
+                await asyncio.sleep(.05)
+                self.assertEqual(ui.composer.text, '/request')
+                self.assertIsNone(ui.current)
+                pipe.send_text('\r')
+                for _ in range(100):
+                    if ui.current and ui.current.get('input_mode') == 'request' and not ui.busy:
+                        break
+                    await asyncio.sleep(.01)
+                self.assertEqual(ui.current['input_mode'], 'request')
+                self.assertEqual(provider.calls, [])
+                pipe.send_text('\x11')
+                await asyncio.wait_for(task, 2)
+            finally:
+                if ui.app.is_running:
+                    ui.app.exit()
+                await task
+
     async def test_discard_pending_returns_editable_advice_during_request_draft(self):
         with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
             service = ChatService(Workspace(Path(tmp)), Config(model='test', max_prompt_bytes=100), TextProvider())

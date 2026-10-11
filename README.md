@@ -89,6 +89,11 @@ Forge walks you through four steps:
    TypeScript, JavaScript, or a comma-separated combination. Choose `generic` for
    general guidance. Forge creates editable standards in `.forge/standards/coding.md`.
 
+Interactive setup uses scrollable menus for model service, document-search mode,
+yes/no choices, and language standards. Use arrow keys to move, Space to toggle
+language selections, and Tab/Enter to confirm. Model names, addresses, and custom
+folder paths remain text entries. Noninteractive setup still works.
+
 Setup creates `agentic_audit/requests/default/request.md`, `.forge/config.toml`, and editable guidance in
 `.forge/standards/`. It ends with a list of created or preserved files, your
 selected settings, and instructions for your first chat. Existing files are
@@ -242,7 +247,8 @@ multiline composer. No browser or local web server is needed.
 
 | Key | Action |
 | --- | --- |
-| Enter | Send the message; open the selected chat when history is focused |
+| Enter | Accept an active command suggestion; otherwise send the message or open the selected chat |
+| Tab with suggestions open | Fill the selected slash command; `/r` suggests `/request` first |
 | Alt+Enter (or Ctrl+J) | Insert a newline in the composer |
 | Tab / Shift+Tab | Move between panes |
 | Arrow keys | Move within the focused pane or select a saved chat |
@@ -647,3 +653,15 @@ reasoning model may spend the full timeout thinking. Reducing reasoning in the
 model server can also help. `forge init` creates `.forge/logs`. `/logs` exports session evidence there for troubleshooting
 (including conversation text, so review it before sharing). It does not collect
 LM Studio server logs or API credentials.
+
+Forge chat colors user messages blue, model replies light gray, and workflow
+results green. Type `/` to open command suggestions, use Up/Down to choose,
+and Tab or Enter to fill a command. Press Enter again to send it. Complete
+commands and command arguments do not trigger suggestions.
+
+Workflow commands appear in the conversation as soon as they start. The Activity
+panel shows a timestamped list of recent events, including command start, model
+wait, completion, and failure, while the command is running. For non-streaming
+provider calls, answer text appears after completion; activity is live. `/discover`
+retries unfinished preparation; after successful planning, use `/run` to review
+the plan and `/approve` to start coding.
