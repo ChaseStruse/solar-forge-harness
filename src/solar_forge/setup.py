@@ -11,6 +11,7 @@ from .domain import Config, CONFIG_TEMPLATE, ForgeError, RagConfig, REQUEST_TEMP
 from .requests import DEFAULT_REQUEST
 from .providers import validate_base_url
 from .workspace import EXCLUDED, Workspace
+from .standards import coding_standards, detect_languages, select_languages, language_summary
 
 PROVIDERS = (
     ('ollama', 'Ollama — a model running on your computer', 'http://localhost:11434', ''),
@@ -87,7 +88,7 @@ def ask_folder(workspace: Workspace, label: str, default='', **kwargs) -> str:
 def render_config(config: Config) -> str:
     # JSON strings/arrays also use valid TOML escaping, including quotes in paths.
     values = {name: getattr(config, name) for name in
-              ('kind', 'model', 'base_url', 'api_key_env', 'docs')}
+              ('kind', 'model', 'base_url', 'api_key_env', 'docs', 'languages')}
     text = CONFIG_TEMPLATE
     for name, value in values.items():
         text = re.sub(rf'(?m)^(?:# )?{name} = .*$', lambda _: f'{name} = {json.dumps(value, ensure_ascii=False)}', text)
@@ -96,8 +97,21 @@ def render_config(config: Config) -> str:
     return text
 
 
-def guided_config(workspace: Workspace) -> Config:
-    print('\n1 of 3: Choose your model service')
+def choose_languages(workspace: Workspace) -> list[str]:
+    detected = detect_languages(workspace)
+    default = ', '.join(detected) or 'generic'
+    print('Detected from up to 500 project paths: ' + language_summary(detected))
+    print('Choose python, typescript, javascript, or generic. Separate multiple languages with commas.')
+    while True:
+        value = ask('Coding standards', default).lower()
+        try:
+            return select_languages(value.replace(',', ' ').split())
+        except ForgeError as exc:
+            print(exc)
+
+
+def guided_config(workspace: Workspace, languages: list[str] | None = None) -> Config:
+    print('\n1 of 4: Choose your model service')
     for number, (_, label, _, _) in enumerate(PROVIDERS, 1):
         print(f'  {number}. {label}')
     selected = choice('Choose a number', ('1', '2', '3', '4'), '1')
@@ -125,7 +139,7 @@ def guided_config(workspace: Workspace) -> Config:
                 break
             print('Use a variable name such as MY_API_KEY (letters, numbers, and underscores).')
 
-    print('\n2 of 3: Project documents')
+    print('\n2 of 4: Project documents')
     print('Forge reads Markdown, text, and reStructuredText files in this folder, including subfolders.')
     print('These documents are included in messages sent to your chosen model service.')
     exists = choice('Do you already have a documents folder? (yes/no)', ('yes', 'y', 'no', 'n'), 'no')
@@ -134,7 +148,7 @@ def guided_config(workspace: Workspace) -> Config:
     if exists in {'no', 'n'}:
         print('We will use docs/ at the project root, creating it if needed.')
 
-    print('\n3 of 3: Document search storage (RAG)')
+    print('\n3 of 4: Document search storage (RAG)')
     print('RAG finds relevant passages from local documents for your model, with source citations.')
     print('After setup, run forge index (or /index in chat) to build the document library.')
     print('  1. Enable local document search\n  2. Set up later')
@@ -142,23 +156,31 @@ def guided_config(workspace: Workspace) -> Config:
     rag = RagConfig()
     if storage == '1':
         rag = RagConfig('local', ask_folder(workspace, 'Storage folder path', '.forge/rag', rag=True))
+    print('\n4 of 4: Language coding standards')
+    languages = choose_languages(workspace) if languages is None else languages
+    print('Starter templates: ' + language_summary(languages))
     docs = tomllib.loads(CONFIG_TEMPLATE)['harness']['docs']
     return replace(Config(), kind=kind, model=model, base_url=base_url, api_key_env=key_env,
-                   docs=[*docs, docs_folder], rag=rag)
+                   docs=[*docs, docs_folder], rag=rag, languages=languages)
 
 
-def initialize(workspace: Workspace, *, interactive: bool) -> None:
+def initialize(workspace: Workspace, *, interactive: bool, languages: list[str] | None = None) -> None:
+    selected = select_languages(languages) if languages is not None else None
     config_path = workspace.path('.forge/config.toml', write=True, internal=True)
     existing = config_path.exists()
     print(f'Set up Forge for {workspace.root}')
     print('Existing files will be kept. Press Ctrl-C to stop setup.')
     if existing:
         config = Config.load(config_path)
+        if selected is not None and set(selected) != set(config.languages):
+            raise ForgeError('Existing configuration has different harness.languages. Edit that setting explicitly; '
+                             'init preserves existing coding.md. Remove coding.md only if you intend to regenerate it.')
         print('Your configuration already exists. Keeping your model, documents, and storage settings.')
     elif interactive:
-        config = guided_config(workspace)
+        config = guided_config(workspace, selected)
     else:
-        config = Config(docs=[*tomllib.loads(CONFIG_TEMPLATE)['harness']['docs'], 'docs'])
+        config = Config(docs=[*tomllib.loads(CONFIG_TEMPLATE)['harness']['docs'], 'docs'],
+                        languages=detect_languages(workspace) if selected is None else selected)
         folder(workspace, 'docs')
         print('Prompts skipped. Edit .forge/config.toml to choose your model before chatting.')
 
@@ -180,6 +202,8 @@ def initialize(workspace: Workspace, *, interactive: bool) -> None:
             print(f'{"Kept existing" if existed else "Created"} search storage folder: {name}/')
     create(workspace, DEFAULT_REQUEST, REQUEST_TEMPLATE, internal=True)
     for name, text in bundled_guidance().items():
+        if name == 'builtin/coding.md':
+            text = coding_standards(config.languages)
         create(workspace, '.forge/standards/' + name.split('/')[-1], text, internal=True)
 
     print('\nSetup complete.')
@@ -187,6 +211,8 @@ def initialize(workspace: Workspace, *, interactive: bool) -> None:
     print(f'Model service: {config.kind}; model: {config.model}')
     print('Settings: .forge/config.toml')
     print('Project guidance: .forge/standards/')
+    print('Starter coding standards: ' + language_summary(config.languages))
+    print('Edit .forge/standards/coding.md to customize; existing guidance is never replaced.')
     print('Documents: ' + (config.docs[-1] + '/' if created_config else ', '.join(config.docs)))
     print('Document search: ' + (f'local folder {config.rag.path} enabled; run forge index to build or refresh' if config.rag.storage == 'local'
                                 else 'set up later (not active)'))

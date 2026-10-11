@@ -8,7 +8,7 @@ from . import __version__
 from .agent import approve, run
 from .audit import Audit
 from .chat import ChatService
-from .domain import Config, ForgeError, REQUEST_TEMPLATE
+from .domain import Config, ForgeError, REQUEST_TEMPLATE, SUPPORTED_LANGUAGES
 from .providers import HTTPProvider, assert_identity, configured_identity
 from .requests import current_request, request_name, request_path
 from .setup import create, initialize
@@ -24,6 +24,8 @@ def parser() -> argparse.ArgumentParser:
     commands = cli.add_subparsers(dest='command', required=True)
     init = commands.add_parser('init', help='Set up your model, documents, and project guidance')
     init.add_argument('--no-interactive', action='store_true', help='Create setup templates without prompts')
+    init.add_argument('--language', action='append', choices=[*SUPPORTED_LANGUAGES, 'generic'],
+                      help='Starter coding standards; repeat for mixed projects (default: detect languages)')
     request = commands.add_parser('request', help='Create a request template')
     request.add_argument('title')
     request.add_argument('--output', help='Must be agentic_audit/requests/<request-name>/request.md')
@@ -87,7 +89,7 @@ def main(argv=None) -> int:
         if not workspace.root.is_dir():
             raise ForgeError('Project root must be an existing directory.')
         if args.command == 'init':
-            initialize(workspace, interactive=not args.no_interactive and sys.stdin.isatty())
+            initialize(workspace, interactive=not args.no_interactive and sys.stdin.isatty(), languages=args.language)
             return 0
         if args.command == 'request':
             if '\n' in args.title or '\r' in args.title or not args.title.strip():

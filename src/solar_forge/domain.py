@@ -9,6 +9,9 @@ class ForgeError(Exception):
     """An actionable error safe to display in the CLI."""
 
 
+SUPPORTED_LANGUAGES = ("python", "typescript", "javascript")
+
+
 REQUEST_TEMPLATE = """# Request: Your request title
 
 ## Description
@@ -30,6 +33,8 @@ model = "CHANGE_ME"
 timeout = 120
 
 [harness]
+# Starter coding standards selected by init; edit generated coding.md freely.
+languages = [] # python, typescript, javascript; empty means generic
 max_turns = 30
 max_file_bytes = 100000
 max_context_bytes = 200000
@@ -151,6 +156,7 @@ class Config:
     max_context_bytes: int = 200000
     max_prompt_bytes: int = 500000
     docs: list[str] = field(default_factory=lambda: ["README.md", "AGENTS.md"])
+    languages: list[str] = field(default_factory=list)
     rag: RagConfig = field(default_factory=RagConfig)
     verification: VerificationConfig = field(default_factory=VerificationConfig)
 
@@ -173,6 +179,10 @@ class Config:
             raise ForgeError("Provider must be openai, anthropic, ollama, or compatible.")
         if not isinstance(config.docs, list) or not all(isinstance(p, str) for p in config.docs):
             raise ForgeError("harness.docs must be a list of project-relative paths.")
+        if (not isinstance(config.languages, list)
+                or any(not isinstance(name, str) or name not in SUPPORTED_LANGUAGES for name in config.languages)
+                or len(set(config.languages)) != len(config.languages)):
+            raise ForgeError('harness.languages must be a list of unique supported names: python, typescript, javascript.')
         config.rag.snapshot()
         config.verification.snapshot()
         return config

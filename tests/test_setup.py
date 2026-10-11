@@ -24,7 +24,7 @@ class SetupTests(unittest.TestCase):
     def test_local_model_new_documents_and_deferred_rag(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            code, out, err, _ = self.invoke(root, ['1', 'my-local-model', '', 'no', '2'])
+            code, out, err, _ = self.invoke(root, ['1', 'my-local-model', '', 'no', '2', ''])
             self.assertEqual(code, 0, err)
             config = Config.load(root / '.forge/config.toml')
             self.assertEqual(config.kind, 'ollama')
@@ -49,7 +49,7 @@ class SetupTests(unittest.TestCase):
                 documents.mkdir()
                 (documents / 'overview.md').write_text('Project goals')
                 answers = [number, 'my-model', ''] + ([''] if key else [])
-                answers += ['yes', str(documents), '1', '']
+                answers += ['yes', str(documents), '1', '', '']
                 code, out, err, prompt = self.invoke(root, answers)
                 self.assertEqual(code, 0, err)
                 config = Config.load(root / '.forge/config.toml')
@@ -70,7 +70,7 @@ class SetupTests(unittest.TestCase):
             answers = ['9', '1', '', 'CHANGE_ME', 'real-model', 'http://remote.example/v1',
                        'http://[invalid', 'http://localhost:bad', '',
                        'maybe', 'yes', '../outside', '/outside', 'missing', '.aws', 'link', 'notes',
-                       '1', '.forge/standards', '../rag', '.env', 'search cache']
+                       '1', '.forge/standards', '../rag', '.env', 'search cache', '']
             code, out, err, _ = self.invoke(root, answers)
             self.assertEqual(code, 0, err)
             self.assertEqual(Config.load(root / '.forge/config.toml').rag.path, 'search cache')
@@ -83,7 +83,7 @@ class SetupTests(unittest.TestCase):
     def test_repeat_setup_preserves_every_file_without_prompts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            self.assertEqual(self.invoke(root, ['1', 'local-model', '', 'no', '2'])[0], 0)
+            self.assertEqual(self.invoke(root, ['1', 'local-model', '', 'no', '2', ''])[0], 0)
             for relative in (DEFAULT_REQUEST, '.forge/standards/coding.md'):
                 (root / relative).write_bytes(b'Custom content\r\n')
             paths = [p for p in root.rglob('*') if p.is_file()]
