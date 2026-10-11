@@ -13,7 +13,11 @@ from .verification import run_check, review_checks
 from .retrieval import search, record_search, context_sources, storage_path, policy
 
 TOOLS = """
-Execute the approved plan one action at a time. Return one JSON object:
+Execute the approved plan with the smallest useful next action. Return one JSON object.
+Use supplied inventory and prior tool results; do not relist unchanged paths or
+reread unchanged content already available. Keep summaries brief; do not repeat
+request or policy text. Read files when needed to make a safe edit.
+Allowed actions:
 {"tool":"list_files"}
 {"tool":"read_file","path":"project-relative/file"}
 {"tool":"search_docs","query":"specific reference question"}

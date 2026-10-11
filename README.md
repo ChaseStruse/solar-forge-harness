@@ -665,3 +665,16 @@ wait, completion, and failure, while the command is running. For non-streaming
 provider calls, answer text appears after completion; activity is live. `/discover`
 retries unfinished preparation; after successful planning, use `/run` to review
 the plan and `/approve` to start coding.
+
+Structured workflow calls use a concise JSON-only instruction instead of the full
+conversational personality guide. Discovery asks only unresolved questions that
+block a correct implementation; planning stays proportional to the request, and
+coding is instructed to reuse supplied inventory and unchanged prior tool results.
+Conversational chat retains the configured Forge personality.
+
+Prompt context references exact duplicate document bodies by their canonical
+source path, preferring project guidance to bundled copies. Distinct or conflicting
+guidance is preserved in full, and complete original snapshots remain in the audit.
+Provider payloads and embedded context use compact UTF-8 JSON. These changes reduce
+prompt overhead without truncating conversation history or weakening approval and
+verification checks. Actual token savings and response latency depend on the model.

@@ -222,6 +222,7 @@ def plan(workspace: Workspace, config: Config, audit: Audit, provider: Provider)
         'Return {"plan":"Markdown implementation plan"}. Include concrete steps, '
         'decisions grounded in recorded answers, files affected, acceptance-criterion '
         'verification using available named checks, and proposed manual checks. Use headings: Affected files, Implementation steps, Verification, Risks. Only configured named verification commands can execute. '
+        'Keep the plan proportional to the request; omit repeated requirements and policy text. '
         'Honor changes already made if this is a revised plan.')
     data = parse_json(call(audit, provider, SYSTEM, [{"role": "user", "content": prompt_json(content)}], config.max_prompt_bytes))
     text = data.get("plan")
