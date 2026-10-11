@@ -52,7 +52,7 @@ NEXT = {
     'executing': 'Use /run to review and resume this run after its active process finishes.',
     'interrupted': 'Coding stopped. Use /run to review and resume.',
     'turn_limit': 'Turn limit reached. Increase max_turns in settings and reopen chat, or start a new run.',
-    'review_required': 'Coding finished. Use /changes to review edits and /ask for help with the suggested checks. Tests have not been run.',
+    'review_required': 'Coding finished. Use /changes to review edits and /status for the summary and recorded check outcomes. Acceptance criteria need review.',
 }
 
 
@@ -362,7 +362,7 @@ class ChatWorkflow:
         assert_current(self.workspace, self.config, audit)
         text = audit.read('plan.md')
         self.state['reviewed_plan'] = {'run': self.state['workflow_run'], 'sha256': file_hash(text)}
-        return ('PROPOSED PLAN — no new edits are authorized yet\nPlan for ' + state['title'] + '\n\n' + text + '\nReview affected files and verification steps above. /approve permits project file edits and starts coding.\nUse /changes to inspect saved changes from earlier execution.'
+        return ('PROPOSED PLAN — no new edits are authorized yet\nPlan for ' + state['title'] + '\n\n' + text + '\nReview affected files and verification steps above. /approve permits project file edits and configured verification commands, and starts coding.\nUse /changes to inspect saved changes from earlier execution.'
                 + ('\nUse /ask to discuss it, /plan to generate a revised plan, or /cancel to leave it unapproved.'
                    if state['status'] == 'planned' else
                    '\nThis resumes saved coding progress. Use /ask to discuss it, or /cancel to leave it paused.'))

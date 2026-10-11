@@ -8,12 +8,14 @@ from .domain import Config, ForgeError
 from .providers import Provider
 from .workflow import SYSTEM, assert_current, call, parse_json, payload, plan_digest, questions_from
 from .workspace import Workspace
+from .verification import run_check, review_checks
 
 TOOLS = """
 Execute the approved plan one action at a time. Return one JSON object:
 {"tool":"list_files"}
 {"tool":"read_file","path":"project-relative/file"}
 {"tool":"write_file","path":"project-relative/file","content":"full UTF-8 content"}
+{"tool":"run_check","name":"configured-command-name"}
 {"tool":"ask_questions","questions":[{"question":"specific unresolved decision",
  "rationale":"why this matters","sources":["request.md or supplied documents key"]}]}
 {"tool":"finish","summary":"changes and remaining work","verification":"suggested checks"}
@@ -22,10 +24,12 @@ request. Request-specific plans, notes, verification, and summaries belong only
 in agentic_audit and are saved by the workflow. Do not create request.md,
 implementation-plan.md, legacy requests/ folders, or root-level audit notes with
 write_file; use ask_questions or finish to record workflow information.
-There is no command runner, deletion, Git, or deployment tool. If a new
+Only run_check can execute commands, using the named verification commands in run context.
+Run relevant checks after editing; use their output to repair failures and rerun.
+There is no arbitrary shell, deletion, Git, or deployment tool. If a new
 consequential decision is unclear, ask_questions before making further changes.
 Tool results are returned as user messages. finish creates a human review record;
-it cannot verify acceptance criteria or prove tests have passed.
+it records actual check outcomes separately from model claims; acceptance criteria need human review.
 """
 
 
@@ -46,9 +50,9 @@ def approve(audit: Audit) -> None:
 def validate_action(action: dict) -> str:
     tool = action.get('tool')
     shapes = {'list_files': set(), 'read_file': {'path'}, 'write_file': {'path', 'content'},
-              'ask_questions': {'questions'}, 'finish': {'summary', 'verification'}}
+              'ask_questions': {'questions'}, 'run_check': {'name'}, 'finish': {'summary', 'verification'}}
     if not isinstance(tool, str) or tool not in shapes:
-        raise ForgeError('Unknown tool. Use list_files, read_file, write_file, ask_questions, or finish.')
+        raise ForgeError('Unknown tool. Use list_files, read_file, write_file, run_check, ask_questions, or finish.')
     if set(action) != shapes[tool] | {'tool'}:
         raise ForgeError(f'Unexpected or missing arguments for {tool}.')
     for name in shapes[tool] - {'questions'}:
@@ -97,11 +101,12 @@ def write_file(workspace: Workspace, config: Config, audit: Audit, state: dict, 
     else:
         raise ForgeError('File changed after write intent; inspect the audit diff before proceeding.')
     state.setdefault('read_versions', {})[relative] = meta['after_sha256']
+    state['last_write_turn'] = state['turns']
     audit.event('file_written', **result, evidence=change_id)
     return result
 
 
-def execute(workspace: Workspace, config: Config, audit: Audit, state: dict, action: dict) -> dict:
+def execute(workspace: Workspace, config: Config, audit: Audit, state: dict, action: dict, *, cancelled=None) -> dict:
     tool = validate_action(action)
     if tool == 'list_files':
         return {'files': workspace.inventory(), 'limit': 500}
@@ -111,6 +116,12 @@ def execute(workspace: Workspace, config: Config, audit: Audit, state: dict, act
         return {'path': action['path'], 'content': content, 'sha256': digest(content)}
     if tool == 'write_file':
         return write_file(workspace, config, audit, state, action)
+    if tool == 'run_check':
+        assert_current(workspace, config, audit)
+        result = run_check(workspace, config, audit, state, action['name'], cancelled=cancelled)
+        state.setdefault('verification_results', []).append(result)
+        state['read_versions'] = {}  # Checks may change files; require fresh reads.
+        return result
     if tool == 'ask_questions':
         context = payload(audit, state)['context']
         questions = questions_from(action, set(context['documents']) | {'request.md'}, len(state['questions']) + 1)
@@ -124,8 +135,8 @@ def execute(workspace: Workspace, config: Config, audit: Audit, state: dict, act
     if not action['summary'].strip() or not action['verification'].strip():
         raise ForgeError('finish needs nonempty summary and verification strings.')
     audit.write('summary.md', '# Review required\n\n' + action['summary'] + '\n\n'
-                '## Suggested verification (not executed)\n\n' + action['verification'] + '\n\n'
-                'The harness has no command runner. Acceptance criteria and tests remain unverified.\n')
+                '## Model verification notes (not execution evidence)\n\n' + action['verification'] + '\n\n'
+                + review_checks(state))
     state['status'] = 'review_required'
     audit.event('review_requested')
     return {'status': 'review_required', 'acceptance_criteria_verified': False}
@@ -168,7 +179,7 @@ def run(workspace: Workspace, config: Config, audit: Audit, provider: Provider, 
             if cancelled and cancelled():
                 raise ForgeError('Stopped by user before executing the saved action.')
             try:
-                result = execute(workspace, config, audit, state, action)
+                result = execute(workspace, config, audit, state, action, cancelled=cancelled)
                 audit.event('tool_result', turn=state['turns'], result=result)
             except (ForgeError, OSError) as exc:
                 result = {'error': str(exc)}

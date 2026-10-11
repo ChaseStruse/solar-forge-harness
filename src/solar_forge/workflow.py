@@ -107,7 +107,8 @@ def questions_from(data: dict, sources: set[str], start: int = 1) -> list[dict]:
 def payload(audit: Audit, state: dict) -> dict:
     return {"request": audit.read("request.md"),
             "context": json.loads((audit.path / "context.json").read_text()),
-            "questions_and_answers": state["questions"]}
+            "questions_and_answers": state["questions"],
+            "verification": state.get("verification", {})}
 
 
 def discover(audit: Audit, provider: Provider, max_prompt_bytes: int = 500000) -> None:
@@ -143,7 +144,7 @@ def prepare(workspace: Workspace, config: Config, request_path: str, provider: P
     audit.write("context.md", '# Context snapshot\n\n' + '\n\n'.join(
         f'## {name}\n\n{text}' for name, text in context['documents'].items()))
     state = audit.load()
-    state.update({"request_path": request_path, **configured_identity(config)})
+    state.update({"request_path": request_path, "verification": config.verification.snapshot(), **configured_identity(config)})
     audit.save(state)
     if on_created:
         on_created(audit)
@@ -172,6 +173,10 @@ def record_answer(audit: Audit, question_id: str, answer: str) -> None:
 def assert_current(workspace: Workspace, config: Config, audit: Audit) -> None:
     state = audit.load()
     assert_identity(state, configured_identity(config))
+    saved_checks = state.get("verification")
+    if (saved_checks is not None and saved_checks != config.verification.snapshot()) or (
+            saved_checks is None and config.verification.commands):
+        raise ForgeError("Verification configuration changed since discovery. Prepare a new run.")
     if read_request(workspace, state["request_path"]) != audit.read("request.md"):
         raise ForgeError("Request changed since discovery. Prepare a new run.")
     current = collect(workspace, config, state["request_path"])
@@ -190,13 +195,17 @@ def plan(workspace: Workspace, config: Config, audit: Audit, provider: Provider)
     content["instruction"] = (
         'Return {"plan":"Markdown implementation plan"}. Include concrete steps, '
         'decisions grounded in recorded answers, files affected, acceptance-criterion '
-        'verification, and proposed user-run checks. Use headings: Affected files, Implementation steps, Verification, Risks. No shell runner exists. '
+        'verification using available named checks, and proposed manual checks. Use headings: Affected files, Implementation steps, Verification, Risks. Only configured named verification commands can execute. '
         'Honor changes already made if this is a revised plan.')
     data = parse_json(call(audit, provider, SYSTEM, [{"role": "user", "content": json.dumps(content)}], config.max_prompt_bytes))
     text = data.get("plan")
     if not isinstance(text, str) or not text.strip():
         raise ForgeError("Model must return a nonempty plan string.")
-    audit.write("plan.md", text.strip() + "\n")
+    text = text.strip() + "\n\n## Configured verification commands\n\n" + (
+        "These trusted commands may execute with local user permissions during this approved run.\n"
+        "```json\n" + json.dumps(config.verification.snapshot(), indent=2) + "\n```\n"
+        if config.verification.commands else "No commands configured; checks must be run manually.\n")
+    audit.write("plan.md", text)
     state.update({"status": "planned", "approved_plan": None})
     audit.save(state)
     audit.event("plan_generated")

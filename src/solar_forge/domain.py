@@ -1,5 +1,5 @@
 """Provider-independent request and configuration models."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 import re
 import tomllib
@@ -36,6 +36,13 @@ max_context_bytes = 200000
 max_prompt_bytes = 500000
 # Add relevant domain documentation here; all paths are project-relative.
 docs = ["README.md", "AGENTS.md", ".forge/standards/coding.md", ".forge/standards/architecture.md", ".forge/standards/deployment.md", ".forge/standards/git.md", ".forge/standards/testing.md"]
+
+# Optional trusted checks, executed only during approved coding runs.
+# [verification]
+# commands = { tests = ["python", "-m", "unittest", "discover", "-s", "tests", "-v"] }
+# env = { PYTHONPATH = "src" }
+# timeout = 120
+# max_output_bytes = 20000
 
 # Reserved for future document search; no index is built yet.
 [rag]
@@ -85,6 +92,32 @@ class RagConfig:
 
 
 @dataclass(frozen=True)
+class VerificationConfig:
+    commands: dict[str, list[str]] = field(default_factory=dict)
+    env: dict[str, str] = field(default_factory=dict)
+    timeout: int = 120
+    max_output_bytes: int = 20000
+
+    def snapshot(self) -> dict:
+        if not isinstance(self.commands, dict) or any(
+            not isinstance(name, str) or not re.fullmatch(r'[a-zA-Z0-9_-]+', name)
+            or not isinstance(argv, list) or not argv
+            or any(not isinstance(arg, str) or '\0' in arg for arg in argv)
+            or not argv[0].strip() for name, argv in self.commands.items()
+        ):
+            raise ForgeError('verification.commands must map names to nonempty argv arrays.')
+        if not isinstance(self.env, dict) or any(
+            not isinstance(key, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key)
+            or not isinstance(value, str) or '\0' in value for key, value in self.env.items()
+        ):
+            raise ForgeError('verification.env must map environment names to strings.')
+        for name in ('timeout', 'max_output_bytes'):
+            if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
+                raise ForgeError(f'verification.{name} must be a positive integer.')
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class Config:
     kind: str = "ollama"
     model: str = "CHANGE_ME"
@@ -97,13 +130,15 @@ class Config:
     max_prompt_bytes: int = 500000
     docs: list[str] = field(default_factory=lambda: ["README.md", "AGENTS.md"])
     rag: RagConfig = field(default_factory=RagConfig)
+    verification: VerificationConfig = field(default_factory=VerificationConfig)
 
     @classmethod
     def load(cls, path: Path) -> "Config":
         try:
             data = tomllib.loads(path.read_text())
             provider, harness = data.get("provider", {}), data.get("harness", {})
-            config = cls(**provider, **harness, rag=RagConfig(**data.get("rag", {})))
+            config = cls(**provider, **harness, rag=RagConfig(**data.get("rag", {})),
+                         verification=VerificationConfig(**data.get("verification", {})))
         except (OSError, TypeError, AttributeError, tomllib.TOMLDecodeError) as exc:
             raise ForgeError(f"Invalid .forge/config.toml: {exc}") from exc
         for name in ("timeout", "max_turns", "max_file_bytes", "max_context_bytes", "max_prompt_bytes"):
@@ -124,4 +159,5 @@ class Config:
                                              or ".." in Path(config.rag.path).parts
                                              or Path(config.rag.path) == Path(".")):
             raise ForgeError("rag.path must be a folder inside the project for local storage.")
+        config.verification.snapshot()
         return config

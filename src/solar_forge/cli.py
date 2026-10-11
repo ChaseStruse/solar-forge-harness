@@ -148,7 +148,7 @@ def main(argv=None) -> int:
                     if not args.approve:
                         if not sys.stdin.isatty():
                             raise ForgeError('Review plan.md and pass --approve, or run in an interactive terminal.')
-                        if input('Approve this plan and permit project file edits? [y/N] ').strip().lower() not in {'y', 'yes'}:
+                        if input('Approve this plan and permit project file edits and configured verification commands? [y/N] ').strip().lower() not in {'y', 'yes'}:
                             print('Plan remains unapproved.')
                             return 0
                     approve(audit)
