@@ -9,7 +9,7 @@ from .audit import Audit
 from .context import collect
 from .domain import Config, ForgeError, Request
 from .requests import read_request
-from .providers import Provider, configured_identity, assert_identity
+from .providers import Provider, configured_identity, assert_identity, normalize_usage
 from .workspace import Workspace
 from .personality import PERSONALITY
 from .retrieval import automatic_search, binding, context_sources, record_search, format_result, policy
@@ -52,6 +52,7 @@ def call(audit: Audit, provider: Provider, system: str, messages: list[dict], ma
     audit.write(f"calls/{call_id}-input.json", json.dumps(record, ensure_ascii=False))
     audit.event("provider_call_started", call_id=call_id, identity=identity)
     partial = []
+    usage = None
     try:
         if cancelled and cancelled():
             raise ForgeError('Stopped by user.')
@@ -66,27 +67,35 @@ def call(audit: Audit, provider: Provider, system: str, messages: list[dict], ma
                         chunk = next(chunks)
                     except StopIteration:
                         break
+                    usage = getattr(chunk, 'usage', None) or usage
                     if cancelled and cancelled():
                         raise ForgeError('Stopped by user.')
                     partial.append(chunk)
-                    on_chunk(chunk)
+                    if chunk:
+                        on_chunk(chunk)
                 result = ''.join(partial)
             finally:
                 if hasattr(chunks, 'close'):
                     chunks.close()
         else:
             result = provider.complete(system, messages)
+            usage = getattr(result, 'usage', None)
         if cancelled and cancelled():
             raise ForgeError('Stopped by user.')
         if not result.strip():
             raise ForgeError('Provider returned no usable text.')
         audit.write(f"calls/{call_id}-output.txt", result)
-        audit.event("provider_call_finished", call_id=call_id)
+        usage = normalize_usage("openai", {"usage": usage})
+        audit.write(f"calls/{call_id}-usage.json", json.dumps(usage))
+        audit.event("provider_call_finished", call_id=call_id, usage=usage)
         return result
-    except Exception:
+    except (Exception, KeyboardInterrupt) as exc:
+        usage = getattr(exc, 'usage', None) or usage
         if partial:
             audit.write(f"calls/{call_id}-partial.txt", ''.join(partial))
-        audit.event("provider_call_failed", call_id=call_id)
+        usage = normalize_usage("openai", {"usage": usage})
+        audit.write(f"calls/{call_id}-usage.json", json.dumps(usage))
+        audit.event("provider_call_failed", call_id=call_id, usage=usage)
         raise
 
 

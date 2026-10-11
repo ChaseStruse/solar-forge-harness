@@ -11,6 +11,7 @@ from .providers import Provider, assert_identity, configured_identity
 from .workflow import call
 from .workspace import Workspace
 from .personality import PERSONALITY
+from .progress import read_progress
 
 CHAT_SYSTEM = PERSONALITY + '\n' + '''You are Solar Forge, a helpful coding and project-planning assistant.
 Converse naturally with the user. Use supplied project guidance and request as
@@ -63,8 +64,15 @@ class ChatService:
     def get(self, session: str) -> dict:
         audit = self._open(session)
         state = audit.load()
+        run_progress = None
+        if state.get('workflow_run'):
+            try:
+                run_progress = read_progress(Audit.open(self.workspace, state['workflow_run']))
+            except (ForgeError, OSError):
+                pass
         return {key: state.get(key) for key in ('title', 'provider', 'model', 'messages',
                                                'pending_message', 'created_at', 'updated_at', 'workflow_run')} | {
+            'progress': read_progress(audit), 'run_progress': run_progress,
             'id': audit.path.relative_to(self.workspace.root).as_posix(),
             'busy': (audit.path / '.lock').exists(), 'input_mode': input_mode(state),
             'workflow_hint': workflow_hint(self.workspace, state)}

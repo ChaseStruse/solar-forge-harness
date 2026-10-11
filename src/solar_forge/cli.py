@@ -14,6 +14,7 @@ from .requests import current_request, request_name, request_path
 from .setup import create, initialize
 from .workflow import discover, plan, prepare, record_answer
 from .workspace import Workspace
+from .progress import read_progress, format_progress
 from .retrieval import build_index, index_status, search, format_result, record_standalone
 
 
@@ -80,6 +81,7 @@ def show(audit: Audit, workspace: Workspace) -> None:
     pending = sum(not q.get('answer') for q in state['questions'])
     print(f"{audit.path.relative_to(workspace.root)}\n  {state['title']}: {state['status']}; "
           f"{pending} pending questions; {state['turns']} turns")
+    print(format_progress(read_progress(audit), width=160))
 
 
 def main(argv=None) -> int:

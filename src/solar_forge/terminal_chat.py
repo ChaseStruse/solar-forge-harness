@@ -16,6 +16,7 @@ from prompt_toolkit.widgets import Frame, Label, TextArea
 
 from .chat import ChatService
 from .domain import ForgeError
+from .progress import with_progress, format_progress
 
 
 ANSI = re.compile(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))')
@@ -35,6 +36,8 @@ class TerminalChat:
         self.busy = False
         self.stop_requested = Event()
         self.partial_reply = ''
+        self.activity = None
+        self.activity_generation = 0
         self.exit_requested = False
         self.notice = 'Enter sends. Alt+Enter adds a line. /help lists actions.'
         self.history = TextArea(read_only=True, scrollbar=True, wrap_lines=False, width=Dimension.exact(28),
@@ -50,6 +53,9 @@ class TerminalChat:
                     Label(lambda: display(self.current.get('workflow_hint', '') if self.current else
                                           'Start: /request or /prepare. Continue: /runs. Help: /help.'),
                           style='class:workflow'),
+                    ConditionalContainer(
+                        Frame(Label(lambda: self.activity_text(), style='class:activity'), title='Activity'),
+                        filter=Condition(lambda: self.activity is not None or self.busy)),
                     Label(lambda: display(self.notice), style='class:status'),
                     Frame(self.composer, title='Message · Enter send / Alt+Enter new line')]),
         ], padding=1)
@@ -65,8 +71,10 @@ class TerminalChat:
         ])
         self.app = Application(layout=Layout(root, focused_element=self.composer), key_bindings=keys,
                                full_screen=True, mouse_support=True, input=input, output=output,
+                               refresh_interval=0.25,
                                style=Style.from_dict({'header': 'bg:#c4e29c #182119 bold',
                                    'footer': 'bg:#252e22 #c4e29c', 'status': '#aebb9f', 'workflow': '#c4e29c',
+                                   'activity': 'bg:#20261f #c4e29c',
                                    'history': 'bg:#111412 #919b91', 'conversation': 'bg:#161817 #e7ebe6',
                                    'composer': 'bg:#20261f #e7ebe6', 'frame.border': '#637951',
                                    'frame.label': '#c4e29c bold'}))
@@ -130,7 +138,7 @@ class TerminalChat:
         def stop(event):
             if self.busy:
                 self.stop_requested.set()
-                self.notice = 'Stopping at the next reply chunk or coding action boundary…'
+                self.notice = 'Stop requested. Checks can stop now; model reads may finish or time out first.'
                 self.app.invalidate()
 
         @keys.add('c-q')
@@ -155,6 +163,7 @@ class TerminalChat:
             return
         try:
             self.current = self.service.get(session)
+            self.activity = self.current.get('run_progress') or self.current.get('progress')
             self.composer.text = ''
             self.notice = ('Reply pending. Ctrl+R retries; /discard-pending lets you edit it.' if self.current['pending_message']
                            else 'Saved conversation reopened.')
@@ -168,11 +177,24 @@ class TerminalChat:
         if self.busy:
             return
         self.current = None
+        self.activity = None
+        self.activity_generation += 1
         self.composer.text = ''
         self.notice = 'New chat. Describe your idea or ask a project question.'
         self.refresh_history()
         self.render()
         self.app.layout.focus(self.composer)
+
+    def activity_text(self) -> str:
+        width = max(12, self.app.output.get_size().columns - (34 if self.app.output.get_size().columns >= 85 else 6))
+        if self.activity is None:
+            return 'Starting… Ctrl+X requests a stop.'
+        # Strip control sequences before clipping so hidden escape bytes cannot
+        # eat the visible space or become active terminal commands.
+        text = format_progress(self.activity, live=self.busy, width=10000,
+                               stop_requested=self.busy and self.stop_requested.is_set())
+        return '\n'.join(line if len(line) <= width else line[:width-1] + '…'
+                         for line in display(text).splitlines())
 
     def render(self) -> None:
         if not self.current:
@@ -238,7 +260,16 @@ class TerminalChat:
         self.busy = True
         self.stop_requested.clear()
         self.partial_reply = ''
+        self.activity_generation += 1
+        generation = self.activity_generation
+        self.activity = None
         loop = asyncio.get_running_loop()
+        def update_activity(snapshot):
+            if self.busy and generation == self.activity_generation:
+                self.activity = snapshot
+                self.app.invalidate()
+        def on_progress(snapshot):
+            loop.call_soon_threadsafe(update_activity, snapshot)
         def append_chunk(chunk):
             self.partial_reply += chunk
             self.render()
@@ -255,7 +286,7 @@ class TerminalChat:
                 self.composer.buffer.set_document(Document(''), bypass_readonly=True)
             self.render()
             if command:
-                self.current = await asyncio.to_thread(self.service.command, self.current['id'], message,
+                self.current = await asyncio.to_thread(with_progress, on_progress, self.service.command, self.current['id'], message,
                                                       cancelled=self.stop_requested.is_set)
                 self.notice = ('Action could not finish. See the details above.' if self.current.get('command_error')
                                else 'Progress saved. Follow the next step above, or ask your model for help.')
@@ -266,7 +297,7 @@ class TerminalChat:
                     self.notice = 'Pending message discarded and kept in the audit. Edit the draft or enter a workflow command.'
 
             else:
-                self.current = await asyncio.to_thread(self.service.send, self.current['id'],
+                self.current = await asyncio.to_thread(with_progress, on_progress, self.service.send, self.current['id'],
                                                       None if retry else question if asking else message, retry=retry, on_chunk=on_chunk,
                                                       cancelled=self.stop_requested.is_set)
                 self.notice = 'Reply saved. Enter sends your next message.'
@@ -283,6 +314,9 @@ class TerminalChat:
             if self.current:
                 self.current = self.service.get(self.current['id'])
         finally:
+            if self.current:
+                self.activity = ((self.current.get('run_progress') or self.current.get('progress'))
+                                 if command else self.current.get('progress'))
             self.partial_reply = ''
             self.busy = False
             self.refresh_history()

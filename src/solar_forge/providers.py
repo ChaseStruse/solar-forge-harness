@@ -14,6 +14,30 @@ class Provider(Protocol):
     def complete(self, system: str, messages: list[dict[str, str]]) -> str: ...
 
 
+class ProviderText(str):
+    """A backward-compatible text response with per-response reported usage."""
+    def __new__(cls, text, usage=None):
+        value = super().__new__(cls, text)
+        value.usage = usage
+        return value
+
+
+def normalize_usage(kind, data):
+    raw = data if kind == 'ollama' else data.get('usage')
+    if not isinstance(raw, dict):
+        return None
+    keys = ('prompt_eval_count', 'eval_count') if kind == 'ollama' else (
+        ('prompt_tokens', 'completion_tokens') if kind == 'compatible' else ('input_tokens', 'output_tokens'))
+    values = [raw.get(key) for key in keys]
+    values = [n if type(n) is int and n >= 0 else None for n in values]
+    if kind == 'anthropic' and values[0] is not None:
+        cache = [raw.get(key, 0) for key in ('cache_creation_input_tokens', 'cache_read_input_tokens')]
+        values[0] = (values[0] + sum(cache) if all(type(n) is int and n >= 0 for n in cache) else None)
+    if all(value is None for value in values):
+        return None
+    return dict(zip(('input_tokens', 'output_tokens'), values))
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -112,6 +136,7 @@ class HTTPProvider:
             headers['Authorization'] = f'Bearer {self.key}'
         request = Request(self.audit_identity['endpoint'], json.dumps(payload).encode(), headers, method='POST')
         used = 0
+        usage = None
         try:
             with build_opener(NoRedirect()).open(request, timeout=self.config.timeout) as response:
                 while True:
@@ -124,15 +149,19 @@ class HTTPProvider:
                     data = json.loads(raw)
                     if not isinstance(data, dict) or data.get('error'):
                         raise ForgeError('Provider stream returned an error.')
+                    usage = normalize_usage('ollama', data) or usage
                     if data.get('done_reason') == 'length':
                         raise ForgeError('Provider response was truncated.')
                     text = data.get('message', {}).get('content', '')
                     if not isinstance(text, str):
                         raise ForgeError('Provider stream returned invalid text.')
-                    if text:
-                        yield text
+                    if text or (data.get('done') is True and usage is not None):
+                        yield ProviderText(text, usage if data.get('done') is True else None)
                     if data.get('done') is True:
                         return
+        except ForgeError as exc:
+            exc.usage = usage
+            raise
         except HTTPError as exc:
             raise ForgeError(f'Provider HTTP {exc.code}; check credentials, model, and endpoint.') from exc
         except (URLError, OSError, ValueError, AttributeError, TypeError) as exc:
@@ -174,6 +203,11 @@ class HTTPProvider:
                 result = data["choices"][0]["message"]["content"]
             if not isinstance(result, str) or not result.strip():
                 raise ForgeError("Provider returned no usable text.")
-            return result
+            return ProviderText(result, normalize_usage(cfg.kind, data))
+        except ForgeError as exc:
+            exc.usage = normalize_usage(cfg.kind, data)
+            raise
         except (KeyError, IndexError, TypeError, AttributeError) as exc:
-            raise ForgeError("Provider returned an unexpected response shape.") from exc
+            error = ForgeError("Provider returned an unexpected response shape.")
+            error.usage = normalize_usage(cfg.kind, data)
+            raise error from exc

@@ -86,7 +86,7 @@ def run_check(workspace, config, audit, state, name, *, cancelled=None):
                        'output': output.decode('utf-8', errors='replace'), 'truncated': truncated,
                        'duration_seconds': round(time.monotonic() - started, 3)}
     audit.write(folder + '/result.json', json.dumps(result, indent=2))
-    audit.event('verification_finished', name=name, status=status, evidence=result['evidence'])
+    audit.event('verification_finished', name=name, status=status, exit_code=exit_code, evidence=result['evidence'])
     return result
 
 

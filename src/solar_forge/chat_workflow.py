@@ -14,6 +14,8 @@ from .workspace import Workspace
 
 from .retrieval import build_index, index_status, search, record_search, format_result
 
+from .progress import read_progress, format_progress
+
 HELP = '''Work on a request here in chat:
   /requests          List request bundles and latest run status
   /select NUMBER     Select a request from /requests
@@ -128,6 +130,7 @@ class ChatWorkflow:
     def status(self, audit: Audit) -> str:
         state = audit.load()
         text = f'{state["title"]}: {state["status"]}\nRun: {audit.path.relative_to(self.workspace.root).as_posix()}'
+        text += '\n\n' + format_progress(read_progress(audit), width=160)
         pending = [q for q in state['questions'] if not q.get('answer')]
         if pending:
             text += '\n\nQuestions to answer:\n' + '\n\n'.join(

@@ -107,7 +107,8 @@ def write_file(workspace: Workspace, config: Config, audit: Audit, state: dict, 
         raise ForgeError('File changed after write intent; inspect the audit diff before proceeding.')
     state.setdefault('read_versions', {})[relative] = meta['after_sha256']
     state['last_write_turn'] = state['turns']
-    audit.event('file_written', **result, evidence=change_id)
+    audit.event('file_written', **result, evidence=change_id,
+                changed=meta['before_sha256'] != meta['after_sha256'])
     return result
 
 
@@ -168,6 +169,7 @@ def run(workspace: Workspace, config: Config, audit: Audit, provider: Provider, 
         raise ForgeError('The current plan has not been approved.')
     state['status'] = 'executing'
     audit.save(state)
+    audit.event('execution_started')
     content = payload(audit, state)
     content['approved_plan'] = (audit.path / 'plan.md').read_text()
     system = SYSTEM + TOOLS + '\nRun context:\n' + json.dumps(content)
