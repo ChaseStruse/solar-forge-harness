@@ -89,14 +89,22 @@ Type / for everyday commands; type a command prefix to find advanced tools.
 def continue_action(state: dict | None) -> tuple[str, str]:
     """Describe the next safe action without implicitly approving development."""
     state = state or {}
+    if state.get('pending_message'):
+        return 'Recover the pending reply', '/recover'
     if state.get('request_draft'):
         if state['request_draft']['stage'] == 'review':
             return 'Save your request', '/save-request'
         return 'Answer the request prompt', ''
-    if state.get('answering') or state.get('run_status') == 'awaiting_answers':
+    if state.get('answering'):
+        return 'Finish your answer', ''
+    if state.get('run_status') == 'awaiting_answers':
         return 'Answer a question', '/answer'
-    if state.get('reviewed_plan') or state.get('run_status') in {'planned', 'interrupted', 'executing'}:
+    if state.get('run_status') == 'turn_limit' and state.get('run_turns', 0) >= state.get('max_turns', 0):
+        return 'Increase the development turn limit', '/settings'
+    if state.get('reviewed_plan'):
         return 'Review the plan', '/review'
+    if state.get('run_status') in {'planned', 'interrupted', 'executing', 'turn_limit'}:
+        return 'Review the plan', '/run'
     if state.get('run_status') in {'review_required', 'completed'}:
         return 'Check development results', '/status'
     if state.get('run_status') == 'discovering':

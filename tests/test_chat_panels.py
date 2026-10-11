@@ -112,7 +112,7 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ui.action_choices[0]['request'], DEFAULT_REQUEST)
             await ui.accept_action()
             self.assertEqual(ui.current['request_path'], DEFAULT_REQUEST)
-            self.assertEqual(ui.composer.text, '/prepare')
+            self.assertEqual(ui.composer.text, '/start')
             self.assertEqual(service.provider.calls, [])
 
     async def test_keyboard_recovery_can_edit_timeout_without_discarding_message(self):

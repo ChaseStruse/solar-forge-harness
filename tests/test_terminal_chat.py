@@ -89,7 +89,7 @@ class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
             await ui.send()
             self.assertEqual(len(ui.request_choices), 1)
             await ui.accept_request_choice()
-            self.assertEqual(ui.composer.text, '/prepare')
+            self.assertEqual(ui.composer.text, '/start')
             self.assertIsNone(ui.current['workflow_run'])
             self.assertEqual(provider.calls, [])
 

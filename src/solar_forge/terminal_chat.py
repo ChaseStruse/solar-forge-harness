@@ -94,7 +94,7 @@ class TerminalChat:
             ConditionalContainer(Frame(self.history, title='Saved chats'),
                                  filter=Condition(lambda: self.app.output.get_size().columns >= 85)),
             HSplit([Frame(self.conversation, title=lambda: display(self.current['title']) if self.current else 'New chat'),
-                    Label(lambda: 'F2 Continue · ' + continue_action(self.current)[0], style='class:workflow'),
+                    Label(lambda: 'Working…' if self.busy else 'F2 Continue · ' + self.next_action()[0], style='class:workflow'),
                     Label(lambda: self.context_indicator(), style='class:workflow'),
                     Label(lambda: self.usage_indicator(), style='class:status'),
                     Label(lambda: display('Working… Ctrl+X requests a stop.' if self.busy else
@@ -165,9 +165,7 @@ class TerminalChat:
 
         @keys.add('f2', filter=idle, eager=True)
         def continue_menu(event):
-            label, command = continue_action(self.current)
-            self.show_actions('Continue', [{'label': label, 'command': command}] if command else
-                              [{'label': label, 'command': ''}])
+            self.show_continue()
 
         actions = Condition(lambda: self.action_choices is not None and not self.busy)
 
@@ -376,8 +374,8 @@ class TerminalChat:
             self.busy = False
         command = message.split(maxsplit=1)[0].lower()
         if not self.current.get('workflow_run') and command in {'/plan', '/run', '/discover', '/answer', '/changes', '/approve'}:
-            self.composer.text = '/prepare'
-            self.notice = 'Request selected. Press Enter to prepare it before planning or working on its run.'
+            self.composer.text = '/start'
+            self.notice = 'Request selected. Press Enter to prepare it and build its plan.'
             self.refresh_history()
             self.render()
             return
@@ -411,9 +409,22 @@ class TerminalChat:
         return f'Last prompt: {prompt} · Tokens: {tokens}'
 
     def show_actions(self, title, choices):
+        self.composer.buffer.cancel_completion()
         self.action_title, self.action_choices, self.action_index = title, choices, 0
         self.render_actions()
         self.app.layout.focus(self.action_picker)
+
+    def next_action(self):
+        return self.current['next_action'] if self.current and 'next_action' in self.current else continue_action(self.current)
+
+    def show_continue(self):
+        label, command = self.next_action()
+        if not command:
+            self.notice = label + '. Enter saves your answer; /ask asks for advice.'
+            self.app.layout.focus(self.composer)
+            self.app.invalidate()
+            return
+        self.show_actions('Continue', [{'label': label, 'command': command}])
 
     def render_actions(self):
         self.action_picker.text = '\n'.join(('› ' if index == self.action_index else '  ') + display(item['label'])
@@ -437,9 +448,12 @@ class TerminalChat:
                 if self.current is None:
                     self.current = await asyncio.to_thread(self.service.new)
                 self.current = await asyncio.to_thread(self.service.choose_request, self.current['id'], action['request'])
-                self.composer.text = '/status' if self.current.get('workflow_run') else '/prepare'
+                self.composer.text = '/next' if self.current.get('workflow_run') else '/start'
                 self.notice = 'Request selected. Follow the next step above.'
                 self.plan_visible = False
+                self.last_failed_command = None
+                self.live_events = []
+                self.activity = self.current.get('run_progress') or self.current.get('progress')
                 self.refresh_history()
                 self.render()
             except (ForgeError, OSError) as exc:
@@ -500,6 +514,8 @@ class TerminalChat:
                     self.busy = False
                     self.new_chat()
                     self.busy = True
+                elif self.current:
+                    self.current = await asyncio.to_thread(self.service.get, self.current['id'])
                 self.notice = result['message']
                 self.composer.text = ''
             else:

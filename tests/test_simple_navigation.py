@@ -13,7 +13,7 @@ class SimpleNavigationTests(unittest.TestCase):
         self.assertIn('/discover', [item.text for item in completer.get_completions(Document('/dis'), None)])
 
     def test_continue_never_approves(self):
-        for status, expected in [('awaiting_answers', '/answer'), ('planned', '/review'),
+        for status, expected in [('awaiting_answers', '/answer'), ('planned', '/run'),
                                  ('discovering', '/next'), ('ready_to_plan', '/next'),
                                  ('review_required', '/status')]:
             label, command = continue_action({'run_status': status})

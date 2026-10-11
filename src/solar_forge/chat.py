@@ -5,7 +5,7 @@ import uuid
 
 from .requests import current_request, request_path, read_request
 from .audit import Audit, now
-from .chat_workflow import ChatWorkflow, HELP, input_mode, workflow_hint
+from .chat_workflow import ChatWorkflow, HELP, continue_action, input_mode, workflow_hint
 from .context import collect
 from .retrieval import automatic_search, record_search, format_result
 from .domain import Config, ForgeError, Request
@@ -80,6 +80,9 @@ class ChatService:
         return {key: state.get(key) for key in ('title', 'provider', 'model', 'messages',
                                                'pending_message', 'created_at', 'updated_at', 'workflow_run', 'request_path', 'reviewed_plan')} | {
             'run_status': run_state.get('status') if run_state else None,
+            'next_action': continue_action(state | {'run_status': run_state.get('status') if run_state else None,
+                                                   'run_turns': run_state.get('turns', 0) if run_state else 0,
+                                                   'max_turns': self.config.max_turns}),
             'progress': read_progress(audit), 'run_progress': run_progress,
             'id': audit.path.relative_to(self.workspace.root).as_posix(),
             'busy': (audit.path / '.lock').exists(), 'input_mode': input_mode(state),
