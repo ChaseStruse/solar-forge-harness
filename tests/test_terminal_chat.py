@@ -27,6 +27,90 @@ class WideOutput(DummyOutput):
 
 
 class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
+    async def test_request_picker_keyboard_navigation_cancel_and_resume_plan(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            workspace = Workspace(Path(tmp))
+            first = 'agentic_audit/requests/first/request.md'
+            second = 'agentic_audit/requests/second/request.md'
+            write_request(workspace, first, REQUEST.replace('Add billing export', 'First request'))
+            write_request(workspace, second, REQUEST.replace('Add billing export', 'Second request'))
+            from solar_forge.workflow import prepare
+            provider = TextProvider(json.dumps({'questions': []}), json.dumps({'plan': '# Plan\nInspect the project.'}))
+            run = prepare(workspace, Config(model='test'), second, provider)
+            provider.calls.clear()
+            ui = TerminalChat(ChatService(workspace, Config(model='test'), provider), input=pipe, output=WideOutput())
+            task = asyncio.create_task(ui.run())
+            async def wait_for(predicate):
+                for _ in range(200):
+                    if predicate():
+                        return
+                    await asyncio.sleep(.01)
+                self.fail('Keyboard action did not finish')
+            try:
+                await asyncio.sleep(.05)
+                pipe.send_text('/plan\r')
+                await wait_for(lambda: ui.request_choices is not None)
+                self.assertEqual(len(ui.request_choices), 2)
+                self.assertIsNone(ui.current)
+                pipe.send_text('\x1b[B')
+                await wait_for(lambda: ui.request_choice_index == 1)
+                pipe.send_text('\x1b[A')
+                await wait_for(lambda: ui.request_choice_index == 0)
+                pipe.send_text('\x1b')
+                await wait_for(lambda: ui.request_choices is None)
+                self.assertEqual(ui.composer.text, '/plan')
+                self.assertEqual(provider.calls, [])
+                pipe.send_text('\r')
+                await wait_for(lambda: ui.request_choices is not None)
+                pipe.send_text('\x1b[B\r')
+                await wait_for(lambda: ui.current and ui.current.get('workflow_run') and not ui.busy)
+                self.assertEqual(ui.current['workflow_run'], run.path.relative_to(workspace.root).as_posix())
+                self.assertEqual(run.load()['status'], 'planned')
+                self.assertEqual(len(provider.calls), 1)
+                self.assertFalse(run.load().get('approved_plan'))
+                self.assertIn('/approve', ui.current['workflow_hint'])
+                pipe.send_text('\x11')
+                await asyncio.wait_for(task, timeout=2)
+            finally:
+                if ui.app.is_running:
+                    ui.app.exit()
+                await task
+
+    async def test_unprepared_request_picker_offers_prepare_and_empty_projects_explain(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            workspace = Workspace(Path(tmp))
+            provider = TextProvider()
+            ui = TerminalChat(ChatService(workspace, Config(model='test'), provider), input=pipe, output=DummyOutput())
+            ui.composer.text = '/plan'
+            await ui.send()
+            self.assertIsNone(ui.request_choices)
+            self.assertIn('No existing requests', ui.notice)
+            write_request(workspace, DEFAULT_REQUEST, REQUEST)
+            await ui.send()
+            self.assertEqual(len(ui.request_choices), 1)
+            await ui.accept_request_choice()
+            self.assertEqual(ui.composer.text, '/prepare')
+            self.assertIsNone(ui.current['workflow_run'])
+            self.assertEqual(provider.calls, [])
+
+    async def test_prepare_picker_and_explicit_paths(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            workspace = Workspace(Path(tmp))
+            write_request(workspace, DEFAULT_REQUEST, REQUEST)
+            other = 'agentic_audit/requests/other/request.md'
+            write_request(workspace, other, REQUEST)
+            provider = TextProvider(json.dumps({'questions': []}))
+            ui = TerminalChat(ChatService(workspace, Config(model='test'), provider), input=pipe, output=DummyOutput())
+            ui.composer.text = '/prepare'
+            await ui.send()
+            self.assertEqual(len(ui.request_choices), 2)
+            ui.move_request_choice(1)
+            await ui.accept_request_choice()
+            state = Audit.open(workspace, ui.current['workflow_run']).load()
+            self.assertEqual(state['request_path'], other)
+            self.assertEqual(state['status'], 'ready_to_plan')
+            self.assertEqual(len(provider.calls), 1)
+
     async def test_discard_pending_returns_editable_advice_during_request_draft(self):
         with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
             service = ChatService(Workspace(Path(tmp)), Config(model='test', max_prompt_bytes=100), TextProvider())

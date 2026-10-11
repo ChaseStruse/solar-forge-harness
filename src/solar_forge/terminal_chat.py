@@ -39,12 +39,17 @@ class TerminalChat:
         self.activity = None
         self.activity_generation = 0
         self.exit_requested = False
+        self.request_choices = None
+        self.request_choice_index = 0
+        self.request_command = ''
         self.notice = 'Enter sends. Alt+Enter adds a line. /help lists actions.'
         self.history = TextArea(read_only=True, scrollbar=True, wrap_lines=False, width=Dimension.exact(28),
                                 style='class:history')
         self.conversation = TextArea(read_only=True, scrollbar=True, wrap_lines=True, style='class:conversation')
         self.composer = TextArea(multiline=True, height=Dimension(min=3, max=6, preferred=3),
-                                 wrap_lines=True, read_only=Condition(lambda: self.busy), style='class:composer')
+                                 wrap_lines=True, read_only=Condition(lambda: self.busy or self.request_choices is not None), style='class:composer')
+        self.request_picker = TextArea(read_only=True, scrollbar=True, wrap_lines=False,
+                                       height=Dimension(min=3, max=8), style='class:composer')
         keys = self._keys()
         body = VSplit([
             ConditionalContainer(Frame(self.history, title='Saved chats'),
@@ -57,6 +62,8 @@ class TerminalChat:
                     ConditionalContainer(
                         Frame(Label(lambda: self.activity_text(), style='class:activity'), title='Activity'),
                         filter=Condition(lambda: self.activity is not None or self.busy)),
+                    ConditionalContainer(Frame(self.request_picker, title='Choose a request · ↑/↓ select · Enter confirm · Esc cancel'),
+                                         filter=Condition(lambda: self.request_choices is not None)),
                     Label(lambda: display(self.notice), style='class:status'),
                     Frame(self.composer, title='Message · Enter send / Alt+Enter new line')]),
         ], padding=1)
@@ -87,9 +94,28 @@ class TerminalChat:
 
     def _keys(self) -> KeyBindings:
         keys = KeyBindings()
-        idle = Condition(lambda: not self.busy)
+        idle = Condition(lambda: not self.busy and self.request_choices is None)
+        picking = Condition(lambda: self.request_choices is not None and not self.busy)
 
-        @keys.add('enter', filter=has_focus(self.composer), eager=True)
+        @keys.add('up', filter=picking, eager=True)
+        def request_up(event):
+            self.move_request_choice(-1)
+
+        @keys.add('down', filter=picking, eager=True)
+        def request_down(event):
+            self.move_request_choice(1)
+
+        @keys.add('enter', filter=picking, eager=True)
+        def request_confirm(event):
+            event.app.create_background_task(self.accept_request_choice())
+
+        @keys.add('escape', filter=picking, eager=True)
+        def request_cancel(event):
+            self.close_request_picker()
+            self.notice = 'Request selection cancelled. Your command is kept in the composer.'
+            self.app.invalidate()
+
+        @keys.add('enter', filter=has_focus(self.composer) & idle, eager=True)
         def send(event):
             if not self.busy:
                 event.app.create_background_task(self.send())
@@ -99,7 +125,7 @@ class TerminalChat:
         def newline(event):
             self.composer.buffer.insert_text('\n')
 
-        @keys.add('enter', filter=has_focus(self.history), eager=True)
+        @keys.add('enter', filter=has_focus(self.history) & idle, eager=True)
         def select(event):
             row = self.history.document.cursor_position_row
             if not self.busy and row < len(self.sessions):
@@ -110,12 +136,12 @@ class TerminalChat:
         def new(event):
             self.new_chat()
 
-        @keys.add('c-r')
+        @keys.add('c-r', filter=idle)
         def retry(event):
             if not self.busy:
                 event.app.create_background_task(self.send(retry=True))
 
-        @keys.add('c-l')
+        @keys.add('c-l', filter=idle)
         def history(event):
             if not self.busy:
                 # On narrow terminals make the session list the main scroll pane.
@@ -127,11 +153,11 @@ class TerminalChat:
                 else:
                     self.app.layout.focus(self.history)
 
-        @keys.add('tab')
+        @keys.add('tab', filter=~picking)
         def next_pane(event):
             focus_next(event)
 
-        @keys.add('s-tab')
+        @keys.add('s-tab', filter=~picking)
         def previous_pane(event):
             focus_previous(event)
 
@@ -162,6 +188,7 @@ class TerminalChat:
     def open_session(self, session: str) -> None:
         if self.busy:
             return
+        self.close_request_picker()
         try:
             self.current = self.service.get(session)
             self.activity = self.current.get('run_progress') or self.current.get('progress')
@@ -177,6 +204,7 @@ class TerminalChat:
     def new_chat(self) -> None:
         if self.busy:
             return
+        self.close_request_picker()
         self.current = None
         self.activity = None
         self.activity_generation += 1
@@ -185,6 +213,61 @@ class TerminalChat:
         self.refresh_history()
         self.render()
         self.app.layout.focus(self.composer)
+
+    def show_request_picker(self, message: str, choices: list[dict]) -> None:
+        self.request_choices = choices
+        self.request_command = message
+        self.request_choice_index = 0
+        self.move_request_choice(0)
+        self.notice = 'Choose the request for ' + message + '.'
+        self.app.layout.focus(self.request_picker)
+        self.app.invalidate()
+
+    def move_request_choice(self, offset: int) -> None:
+        if not self.request_choices:
+            return
+        self.request_choice_index = max(0, min(len(self.request_choices) - 1, self.request_choice_index + offset))
+        self.request_picker.text = '\n'.join(
+            ('› ' if index == self.request_choice_index else '  ') +
+            display(f'{item["title"]} — {item["status"]} · {item["path"]}').replace('\n', ' ')
+            for index, item in enumerate(self.request_choices))
+        self.request_picker.buffer.cursor_position = self.request_picker.document.translate_row_col_to_index(
+            self.request_choice_index, 0)
+        self.app.invalidate()
+
+    def close_request_picker(self) -> None:
+        self.request_choices = None
+        self.request_command = ''
+        self.app.layout.focus(self.composer)
+        self.app.invalidate()
+
+    async def accept_request_choice(self) -> None:
+        if not self.request_choices or self.busy:
+            return
+        choice = self.request_choices[self.request_choice_index]
+        message = self.request_command
+        self.close_request_picker()
+        self.busy = True
+        try:
+            if self.current is None:
+                self.current = await asyncio.to_thread(self.service.new)
+            self.current = await asyncio.to_thread(self.service.choose_request, self.current['id'], choice['path'])
+        except (ForgeError, OSError) as exc:
+            self.notice = display(str(exc))
+            self.render()
+            return
+        finally:
+            self.busy = False
+        command = message.split(maxsplit=1)[0].lower()
+        if not self.current.get('workflow_run') and command in {'/plan', '/run', '/discover', '/answer', '/changes', '/approve'}:
+            self.composer.text = '/prepare'
+            self.notice = 'Request selected. Press Enter to prepare it before planning or working on its run.'
+            self.refresh_history()
+            self.render()
+            return
+        # Picking a request never approves an existing plan. Show it for review.
+        self.composer.text = '/run' if command == '/approve' else message
+        await self.send(skip_picker=True)
 
     def activity_text(self) -> str:
         width = max(12, self.app.output.get_size().columns - (34 if self.app.output.get_size().columns >= 85 else 6))
@@ -223,8 +306,8 @@ class TerminalChat:
         self.conversation.buffer.cursor_position = len(text) if self.current else 0
         self.app.invalidate()
 
-    async def send(self, *, retry: bool = False) -> None:
-        if self.busy:
+    async def send(self, *, retry: bool = False, skip_picker: bool = False) -> None:
+        if self.busy or self.request_choices is not None:
             return
         message = self.composer.text.strip()
         if not retry and message.startswith('/open '):
@@ -247,6 +330,20 @@ class TerminalChat:
             self.notice = 'Retry with Ctrl+R, or use /discard-pending to edit the saved message.'
             self.app.invalidate()
             return
+        if not retry and not skip_picker:
+            try:
+                choices = self.service.request_options(message, self.current['id'] if self.current else None)
+            except (ForgeError, OSError) as exc:
+                self.notice = display(str(exc))
+                self.app.invalidate()
+                return
+            if choices is not None:
+                if choices:
+                    self.show_request_picker(message, choices)
+                else:
+                    self.notice = 'No existing requests. Use /request TITLE to create one.'
+                    self.app.invalidate()
+                return
         # /ask explicitly consults the model while a request/answer prompt is active.
         parts = message.split(maxsplit=1)
         asking = not retry and bool(parts) and parts[0].lower() == '/ask'
