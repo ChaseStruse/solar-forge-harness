@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .domain import Config, ForgeError
+from .prompts import prompt_json
 
 
 class Provider(Protocol):
@@ -53,7 +54,7 @@ def local_host(host: str) -> bool:
 
 
 def post_json(url: str, headers: dict, payload: dict, timeout: int) -> dict:
-    request = Request(url, json.dumps(payload).encode(),
+    request = Request(url, prompt_json(payload).encode(),
                       headers={"Content-Type": "application/json", **headers}, method="POST")
     try:
         with build_opener(NoRedirect()).open(request, timeout=timeout) as response:
@@ -67,8 +68,20 @@ def post_json(url: str, headers: dict, payload: dict, timeout: int) -> dict:
     except HTTPError as exc:
         # Response bodies may contain prompt data or credentials; do not log them.
         raise ForgeError(f"Provider HTTP {exc.code}; check credentials, model, and endpoint.") from exc
-    except (URLError, TimeoutError, OSError, ValueError) as exc:
-        raise ForgeError("Provider connection failed or returned invalid JSON; check endpoint and timeout.") from exc
+    except TimeoutError as exc:
+        raise ForgeError(f"Provider timed out after {timeout} seconds waiting for a response. "
+                         "For slow local reasoning models, increase [provider].timeout in "
+                         ".forge/config.toml (for example, 600), or reduce reasoning in the model server. "
+                         "Use /logs for session diagnostics, then retry /discover.") from exc
+    except URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            raise ForgeError(f"Provider timed out after {timeout} seconds; increase [provider].timeout "
+                             "in .forge/config.toml or reduce model reasoning. Use /logs for diagnostics.") from exc
+        raise ForgeError("Provider connection failed; check endpoint and whether the server is running.") from exc
+    except ValueError as exc:
+        raise ForgeError("Provider returned invalid JSON; check the server response.") from exc
+    except OSError as exc:
+        raise ForgeError("Provider connection failed while reading the response; check the server.") from exc
 
 
 def validate_base_url(base: str) -> None:
@@ -134,7 +147,7 @@ class HTTPProvider:
         headers = {'Content-Type': 'application/json'}
         if self.key:
             headers['Authorization'] = f'Bearer {self.key}'
-        request = Request(self.audit_identity['endpoint'], json.dumps(payload).encode(), headers, method='POST')
+        request = Request(self.audit_identity['endpoint'], prompt_json(payload).encode(), headers, method='POST')
         used = 0
         usage = None
         try:
@@ -202,6 +215,10 @@ class HTTPProvider:
                     raise ForgeError("Compatible provider response was truncated or needs unsupported tools.")
                 result = data["choices"][0]["message"]["content"]
             if not isinstance(result, str) or not result.strip():
+                if cfg.kind == 'compatible' and data['choices'][0]['message'].get('reasoning_content'):
+                    raise ForgeError("Provider returned reasoning but no final answer. Increase "
+                                     "[provider].timeout or reduce reasoning in the model server; "
+                                     "reasoning cannot be used as the requested answer.")
                 raise ForgeError("Provider returned no usable text.")
             return ProviderText(result, normalize_usage(cfg.kind, data))
         except ForgeError as exc:

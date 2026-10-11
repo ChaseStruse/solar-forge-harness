@@ -90,3 +90,23 @@ class ProviderTests(unittest.TestCase):
             with patch('solar_forge.providers.post_json', return_value=response):
                 with self.assertRaises(ForgeError):
                     HTTPProvider(Config(model='local')).complete('system', [])
+
+    def test_timeout_and_invalid_json_have_distinct_diagnostics(self):
+        from solar_forge.providers import post_json
+        from urllib.error import URLError
+        for failure in (TimeoutError(), URLError(TimeoutError())):
+            with patch('solar_forge.providers.build_opener') as opener:
+                opener.return_value.open.side_effect = failure
+                with self.assertRaisesRegex(ForgeError, 'timed out after 120 seconds'):
+                    post_json('http://localhost:1234/v1/chat/completions', {}, {}, 120)
+        with patch('solar_forge.providers.build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = b'bad json'
+            with self.assertRaisesRegex(ForgeError, 'invalid JSON'):
+                post_json('http://localhost:1234/v1/chat/completions', {}, {}, 120)
+
+    def test_reasoning_is_not_a_final_answer(self):
+        response = {'choices': [{'finish_reason': 'stop', 'message': {
+            'content': '', 'reasoning_content': 'still thinking'}}]}
+        with patch('solar_forge.providers.post_json', return_value=response):
+            with self.assertRaisesRegex(ForgeError, 'reasoning but no final answer'):
+                HTTPProvider(Config(kind='compatible', model='local')).complete('system', [])

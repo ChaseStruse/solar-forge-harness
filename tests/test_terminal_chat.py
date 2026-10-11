@@ -27,6 +27,196 @@ class WideOutput(DummyOutput):
 
 
 class TerminalChatTests(unittest.IsolatedAsyncioTestCase):
+    async def test_request_picker_keyboard_navigation_cancel_and_resume_plan(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            workspace = Workspace(Path(tmp))
+            first = 'agentic_audit/requests/first/request.md'
+            second = 'agentic_audit/requests/second/request.md'
+            write_request(workspace, first, REQUEST.replace('Add billing export', 'First request'))
+            write_request(workspace, second, REQUEST.replace('Add billing export', 'Second request'))
+            from solar_forge.workflow import prepare
+            provider = TextProvider(json.dumps({'questions': []}), json.dumps({'plan': '# Plan\nInspect the project.'}))
+            run = prepare(workspace, Config(model='test'), second, provider)
+            provider.calls.clear()
+            ui = TerminalChat(ChatService(workspace, Config(model='test'), provider), input=pipe, output=WideOutput())
+            task = asyncio.create_task(ui.run())
+            async def wait_for(predicate):
+                for _ in range(200):
+                    if predicate():
+                        return
+                    await asyncio.sleep(.01)
+                self.fail('Keyboard action did not finish')
+            try:
+                await asyncio.sleep(.05)
+                pipe.send_text('/plan\r')
+                await wait_for(lambda: ui.request_choices is not None)
+                self.assertEqual(len(ui.request_choices), 2)
+                self.assertIsNone(ui.current)
+                pipe.send_text('\x1b[B')
+                await wait_for(lambda: ui.request_choice_index == 1)
+                pipe.send_text('\x1b[A')
+                await wait_for(lambda: ui.request_choice_index == 0)
+                pipe.send_text('\x1b')
+                await wait_for(lambda: ui.request_choices is None)
+                self.assertEqual(ui.composer.text, '/plan')
+                self.assertEqual(provider.calls, [])
+                pipe.send_text('\r')
+                await wait_for(lambda: ui.request_choices is not None)
+                pipe.send_text('\x1b[B\r')
+                await wait_for(lambda: ui.current and ui.current.get('workflow_run') and not ui.busy)
+                self.assertEqual(ui.current['workflow_run'], run.path.relative_to(workspace.root).as_posix())
+                self.assertEqual(run.load()['status'], 'planned')
+                self.assertEqual(len(provider.calls), 1)
+                self.assertFalse(run.load().get('approved_plan'))
+                self.assertIn('/approve', ui.current['workflow_hint'])
+                pipe.send_text('\x11')
+                await asyncio.wait_for(task, timeout=2)
+            finally:
+                if ui.app.is_running:
+                    ui.app.exit()
+                await task
+
+    async def test_unprepared_request_picker_offers_prepare_and_empty_projects_explain(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            workspace = Workspace(Path(tmp))
+            provider = TextProvider()
+            ui = TerminalChat(ChatService(workspace, Config(model='test'), provider), input=pipe, output=DummyOutput())
+            ui.composer.text = '/plan'
+            await ui.send()
+            self.assertIsNone(ui.request_choices)
+            self.assertIn('No existing requests', ui.notice)
+            write_request(workspace, DEFAULT_REQUEST, REQUEST)
+            await ui.send()
+            self.assertEqual(len(ui.request_choices), 1)
+            await ui.accept_request_choice()
+            self.assertEqual(ui.composer.text, '/start')
+            self.assertIsNone(ui.current['workflow_run'])
+            self.assertEqual(provider.calls, [])
+
+    async def test_prepare_picker_and_explicit_paths(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            workspace = Workspace(Path(tmp))
+            write_request(workspace, DEFAULT_REQUEST, REQUEST)
+            other = 'agentic_audit/requests/other/request.md'
+            write_request(workspace, other, REQUEST)
+            provider = TextProvider(json.dumps({'questions': []}))
+            ui = TerminalChat(ChatService(workspace, Config(model='test'), provider), input=pipe, output=DummyOutput())
+            ui.composer.text = '/prepare'
+            await ui.send()
+            self.assertEqual(len(ui.request_choices), 2)
+            ui.move_request_choice(1)
+            await ui.accept_request_choice()
+            state = Audit.open(workspace, ui.current['workflow_run']).load()
+            self.assertEqual(state['request_path'], other)
+            self.assertEqual(state['status'], 'ready_to_plan')
+            self.assertEqual(len(provider.calls), 1)
+
+    async def test_approval_picker_opens_review_without_starting_coding(self):
+        from solar_forge.workflow import prepare, plan
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            workspace = Workspace(Path(tmp))
+            write_request(workspace, DEFAULT_REQUEST, REQUEST)
+            provider = TextProvider(json.dumps({'questions': []}), json.dumps({'plan': '# Plan\nInspect project.'}))
+            config = Config(model='test')
+            run = prepare(workspace, config, DEFAULT_REQUEST, provider)
+            plan(workspace, config, run, provider)
+            provider.calls.clear()
+            ui = TerminalChat(ChatService(workspace, config, provider), input=pipe, output=DummyOutput())
+            ui.composer.text = '/approve'
+            await ui.send()
+            self.assertIsNotNone(ui.request_choices)
+            await ui.accept_request_choice()
+            self.assertEqual(run.load()['status'], 'planned')
+            self.assertFalse(run.load().get('approved_plan'))
+            self.assertEqual(provider.calls, [])
+            self.assertIn('/approve', ui.current['workflow_hint'])
+
+    async def test_prepare_picker_with_unused_default_template_and_one_valid_request(self):
+        from solar_forge.domain import REQUEST_TEMPLATE
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            workspace = Workspace(Path(tmp))
+            write_request(workspace, DEFAULT_REQUEST, REQUEST_TEMPLATE)
+            actual = 'agentic_audit/requests/calculator/request.md'
+            write_request(workspace, actual, REQUEST)
+            provider = TextProvider(json.dumps({'questions': []}))
+            ui = TerminalChat(ChatService(workspace, Config(model='test'), provider), input=pipe, output=DummyOutput())
+            ui.composer.text = '/prepare'
+            await ui.send()
+            self.assertEqual(len(ui.request_choices), 1)
+            self.assertEqual(ui.request_choices[0]['path'], actual)
+            self.assertEqual(provider.calls, [])
+            await ui.accept_request_choice()
+            state = Audit.open(workspace, ui.current['workflow_run']).load()
+            self.assertEqual(state['request_path'], actual)
+            self.assertEqual(state['status'], 'ready_to_plan')
+            self.assertNotIn('Multiple requests exist', ui.conversation.text)
+
+    async def test_keyboard_slash_autofill_requires_separate_send(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            provider = TextProvider()
+            ui = TerminalChat(ChatService(Workspace(Path(tmp)), Config(model='test'), provider), input=pipe, output=WideOutput())
+            task = asyncio.create_task(ui.run())
+            try:
+                await asyncio.sleep(.05)
+                pipe.send_text('/r')
+                for _ in range(100):
+                    if ui.composer.buffer.complete_state:
+                        break
+                    await asyncio.sleep(.01)
+                self.assertIsNotNone(ui.composer.buffer.complete_state)
+                pipe.send_text('\t')
+                await asyncio.sleep(.05)
+                self.assertEqual(ui.composer.text, '/request')
+                self.assertIsNone(ui.current)
+                pipe.send_text('\r')
+                for _ in range(100):
+                    if ui.current and ui.current.get('input_mode') == 'request' and not ui.busy:
+                        break
+                    await asyncio.sleep(.01)
+                self.assertEqual(ui.current['input_mode'], 'request')
+                self.assertEqual(provider.calls, [])
+                pipe.send_text('\x11')
+                await asyncio.wait_for(task, 2)
+            finally:
+                if ui.app.is_running:
+                    ui.app.exit()
+                await task
+
+    async def test_slash_opens_rendered_selectable_command_menu(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            ui = TerminalChat(ChatService(Workspace(Path(tmp)), Config(model='test'), TextProvider()), input=pipe, output=WideOutput())
+            task = asyncio.create_task(ui.run())
+            try:
+                await asyncio.sleep(.05)
+                pipe.send_text('/')
+                for _ in range(100):
+                    if ui.composer.buffer.complete_state:
+                        break
+                    await asyncio.sleep(.01)
+                self.assertIsNotNone(ui.composer.buffer.complete_state)
+                await asyncio.sleep(.05)
+                screen = ui.app.renderer._last_screen
+                rendered = '\n'.join(''.join(cell.char for _, cell in sorted(row.items())) for _, row in sorted(screen.data_buffer.items()))
+                self.assertIn('/request', rendered)
+                self.assertIn('/start', rendered)
+                self.assertNotIn('/discover', rendered)
+                self.assertIsNone(ui.current)
+                pipe.send_text('\x1b[B')
+                await asyncio.sleep(.05)
+                self.assertIsNotNone(ui.composer.buffer.complete_state.current_completion)
+                chosen = ui.composer.buffer.complete_state.current_completion.text
+                pipe.send_text('\r')
+                await asyncio.sleep(.05)
+                self.assertEqual(ui.composer.text, chosen)
+                self.assertIsNone(ui.current)
+                self.assertIsNone(ui.composer.buffer.complete_state)
+                pipe.send_text('\x11')
+                await asyncio.wait_for(task, 2)
+            finally:
+                if ui.app.is_running:
+                    ui.app.exit()
+                await task
+
     async def test_discard_pending_returns_editable_advice_during_request_draft(self):
         with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
             service = ChatService(Workspace(Path(tmp)), Config(model='test', max_prompt_bytes=100), TextProvider())
@@ -239,3 +429,26 @@ class TerminalBoundaryTests(unittest.TestCase):
         with patch('solar_forge.terminal_chat.sys.stdin.isatty', return_value=False):
             with self.assertRaisesRegex(ForgeError, 'interactive terminal'):
                 run_terminal_chat(None)
+
+
+class ChatPresentationTests(unittest.TestCase):
+    def test_slash_suggestions_prioritize_request_and_stop_after_arguments(self):
+        from prompt_toolkit.document import Document
+        from solar_forge.terminal_chat import SlashCompleter
+        completer = SlashCompleter()
+        options = list(completer.get_completions(Document('/r'), None))
+        self.assertEqual(options[0].text, '/request')
+        self.assertIn('/run', [item.text for item in options])
+        self.assertEqual(list(completer.get_completions(Document('/request title'), None)), [])
+        self.assertNotIn('/request', [item.text for item in completer.get_completions(Document('/request'), None)])
+
+    def test_user_and_model_lines_receive_different_styles(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            service = ChatService(Workspace(Path(tmp)), Config(model='test'), TextProvider())
+            ui = TerminalChat(service, input=pipe, output=DummyOutput())
+            ui.current = service.new()
+            ui.current['messages'] = [{'role': 'user', 'content': 'Question\nmore'}, {'role': 'assistant', 'content': 'Answer'}]
+            ui.render()
+            tokens = ui.conversation.control.lexer.lex_document(ui.conversation.document)
+            self.assertEqual(tokens(1)[0][0], 'class:user')
+            self.assertEqual(tokens(5)[0][0], 'class:assistant')

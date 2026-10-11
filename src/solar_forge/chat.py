@@ -1,16 +1,20 @@
 """Audited, provider-independent conversation service."""
+from __future__ import annotations
 import json
+import uuid
 
 from .requests import current_request, request_path, read_request
 from .audit import Audit, now
-from .chat_workflow import ChatWorkflow, HELP, input_mode, workflow_hint
+from .chat_workflow import ChatWorkflow, HELP, continue_action, input_mode, workflow_hint
 from .context import collect
 from .retrieval import automatic_search, record_search, format_result
 from .domain import Config, ForgeError, Request
 from .providers import Provider, assert_identity, configured_identity
 from .workflow import call
-from .workspace import Workspace
+from .workspace import Workspace, atomic_write
 from .personality import PERSONALITY
+from .prompts import compact_context, prompt_json
+from .chat_settings import FIELDS, update as update_setting
 from .progress import read_progress
 
 CHAT_SYSTEM = PERSONALITY + '\n' + '''You are Solar Forge, a helpful coding and project-planning assistant.
@@ -65,13 +69,20 @@ class ChatService:
         audit = self._open(session)
         state = audit.load()
         run_progress = None
+        run_state = None
         if state.get('workflow_run'):
             try:
-                run_progress = read_progress(Audit.open(self.workspace, state['workflow_run']))
+                selected = Audit.open(self.workspace, state['workflow_run'])
+                run_state = selected.load()
+                run_progress = read_progress(selected)
             except (ForgeError, OSError):
                 pass
         return {key: state.get(key) for key in ('title', 'provider', 'model', 'messages',
-                                               'pending_message', 'created_at', 'updated_at', 'workflow_run')} | {
+                                               'pending_message', 'created_at', 'updated_at', 'workflow_run', 'request_path', 'reviewed_plan')} | {
+            'run_status': run_state.get('status') if run_state else None,
+            'next_action': continue_action(state | {'run_status': run_state.get('status') if run_state else None,
+                                                   'run_turns': run_state.get('turns', 0) if run_state else 0,
+                                                   'max_turns': self.config.max_turns}),
             'progress': read_progress(audit), 'run_progress': run_progress,
             'id': audit.path.relative_to(self.workspace.root).as_posix(),
             'busy': (audit.path / '.lock').exists(), 'input_mode': input_mode(state),
@@ -80,10 +91,10 @@ class ChatService:
     def list(self) -> list[dict]:
         sessions = []
         for audit in Audit.discover(self.workspace):
-            session = audit.path.relative_to(self.workspace.root).as_posix()
-            if audit.load().get('run_kind') == 'chat':
-                data = self.get(session)
-                sessions.append({k: data[k] for k in ('id', 'title', 'provider', 'model', 'updated_at')})
+            state = audit.load()
+            if state.get('run_kind') == 'chat':
+                sessions.append({k: state[k] for k in ('title', 'provider', 'model', 'updated_at')} |
+                                {'id': audit.path.relative_to(self.workspace.root).as_posix()})
         return sorted(sessions, key=lambda s: s['updated_at'], reverse=True)
 
     def prompt_context(self, audit: Audit, state: dict) -> tuple[dict, str]:
@@ -100,7 +111,7 @@ class ChatService:
         context['request_path'] = name
         context['project_request'] = read_request(self.workspace, name) if name and request_path(self.workspace, name).exists() else None
         context['workflow'] = ChatWorkflow(self.workspace, self.config, self.provider, audit, state).context()
-        system = CHAT_SYSTEM + '\nChat commands:\n' + HELP + '\nProject context:\n' + json.dumps(context, ensure_ascii=False)
+        system = CHAT_SYSTEM + '\nChat commands:\n' + '\n'.join(line.strip() for line in HELP.splitlines() if line.startswith('  /')) + '\nProject context:\n' + prompt_json(compact_context(context))
         return context, system
 
     def inspect_context(self, audit: Audit, state: dict) -> str:
@@ -133,7 +144,7 @@ class ChatService:
             new = self.new()
             target = self._open(new['id'])
             following = target.load()
-            for key in ('request_path', 'workflow_run', 'request_draft', 'answering'):
+            for key in ('request_path', 'workflow_run', 'request_draft', 'answering', 'guided_workflow'):
                 if key in state:
                     following[key] = state[key]
             following.update(parent_chat=session, title='Continued: ' + state['title'][:55],
@@ -177,8 +188,8 @@ class ChatService:
                     record_search(audit, context['retrieval'])
                 response = call(audit, self.provider, system, messages, self.config.max_prompt_bytes,
                                 on_chunk=on_chunk, cancelled=cancelled)
-            except Exception:
-                audit.event('chat_reply_failed')
+            except Exception as exc:
+                audit.event('chat_reply_failed', error=str(exc) if isinstance(exc, ForgeError) else 'Unexpected failure')
                 raise
             state['messages'] = [*messages, {'role': 'assistant', 'content': response}]
             state['pending_message'] = None
@@ -207,6 +218,8 @@ class ChatService:
 
     def command(self, session: str, message: str, *, cancelled=None) -> dict:
         """User-entered actions only; provider replies never pass through this path."""
+        if message.strip().lower() == '/logs':
+            return self.logs(session)
         if message.strip() == '/continue':
             return self.continue_chat(session)
         if message.strip() == '/discard-pending':
@@ -250,6 +263,159 @@ class ChatService:
             if not error:
                 audit.event('chat_command_finished')
         return self.get(session) | {'command_error': error}
+
+    def settings(self, session: str | None, value: str = '') -> dict:
+        if not value:
+            return {'values': {field: getattr(self.config, field) for field in FIELDS}}
+        parts = value.split(maxsplit=1)
+        if len(parts) != 2:
+            raise ForgeError('Use /settings FIELD VALUE, or /settings for the menu.')
+        audit = self._open(session) if session else None
+        if audit:
+            with audit.lock():
+                changed_model = update_setting(self, *parts)
+                audit.event('chat_settings_changed', field=parts[0], value=getattr(self.config, parts[0]))
+        else:
+            changed_model = update_setting(self, *parts)
+        return {'new_chat_required': changed_model,
+                'message': f'Saved {parts[0]} = {getattr(self.config, parts[0])}. ' +
+                ('Start a new conversation for this model; existing runs retain their original model.' if changed_model else 'Applied to this session.')}
+
+    def history(self, query: str = '') -> list[dict]:
+        results = []
+        for entry in self.list():
+            if not query:
+                results.append(entry | {'snippet': '', 'kind': 'chat'})
+                if len(results) >= 50:
+                    return results
+                continue
+            audit = self._open(entry['id'])
+            chat = audit.load()
+            text = '\n'.join(message['content'] for message in chat['messages'])
+            text += '\n' + (chat.get('pending_message') or '')
+            event_path = audit.path / 'events.jsonl'
+            if event_path.is_file():
+                for line in event_path.read_text().splitlines():
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    if isinstance(event.get('error'), str):
+                        text += '\n' + event['error']
+            haystack = entry['title'] + '\n' + (chat.get('request_path') or '') + '\n' + text
+            if query.casefold() in haystack.casefold():
+                match = next((line for line in text.splitlines() if query and query.casefold() in line.casefold()), '')
+                results.append(entry | {'snippet': match[:160], 'kind': 'chat'})
+            if len(results) >= 50:
+                return results
+        workflow = ChatWorkflow(self.workspace, self.config, self.provider, None, {})
+        for choice in workflow.request_options():
+            text = read_request(self.workspace, choice['path'])
+            if query.casefold() in (choice['title'] + '\n' + choice['path'] + '\n' + text).casefold():
+                results.append({'kind': 'request', 'title': choice['title'], 'request': choice['path'],
+                                'snippet': choice['status']})
+            if len(results) >= 50:
+                break
+        return results[:50]
+
+    def request_options(self, message: str, session: str | None = None) -> list[dict] | None:
+        """Return picker choices only when an implicit request/run is missing."""
+        parts = message.split(maxsplit=1)
+        command = parts[0].lower() if parts else ''
+        value = parts[1].strip() if len(parts) > 1 else ''
+        request_commands = {'/start', '/prepare', '/edit-request', '/next'}
+        run_commands = {'/plan', '/run', '/discover', '/answer', '/changes', '/approve'}
+        if command == '/request' and value == 'show':
+            command, value = '/edit-request', ''
+        if command not in request_commands | run_commands:
+            return None
+        if value and command not in {'/answer', '/changes'}:
+            return None
+        audit = self._open(session) if session else None
+        state = audit.load() if audit else {}
+        if state.get('pending_message') or state.get('request_draft') or state.get('answering'):
+            return None
+        if state.get('workflow_run') or (command in request_commands and state.get('request_path')):
+            return None
+        workflow = ChatWorkflow(self.workspace, self.config, self.provider, audit, state)
+        options = workflow.request_options()
+        # Request-only commands already resolve a sole bundle without ambiguity.
+        if command in request_commands and len(options) == 1:
+            try:
+                # The resolver also counts unfinished templates omitted from
+                # the picker. Only bypass the menu if it can resolve the path.
+                resolved = current_request(self.workspace)
+            except ForgeError:
+                pass
+            else:
+                if resolved == options[0]['path']:
+                    return None
+        return options
+
+    def choose_request(self, session: str, name: str) -> dict:
+        audit = self._open(session)
+        with audit.lock():
+            state = audit.load()
+            if state.get('pending_message'):
+                raise ForgeError('Discard or retry the pending message before selecting a request.')
+            workflow = ChatWorkflow(self.workspace, self.config, self.provider, audit, state)
+            result = workflow.choose_request(name)
+            state['messages'].append({'role': 'assistant', 'content': 'Forge workflow\n' + result})
+            state['updated_at'] = now()
+            audit.save(state)
+            self._transcript(audit, state)
+        return self.get(session)
+
+    def logs(self, session: str) -> dict:
+        """Export diagnostics without calling the model, even after a failed reply."""
+        audit = self._open(session)
+        with audit.lock():
+            state = audit.load()
+            lines = ['# Solar Forge session logs', '', f'Chat: {session}',
+                     f'Exported: {now()}', f'Configured timeout: {self.config.timeout} seconds',
+                     '', 'Contains conversation text and diagnostics; review before sharing.', '']
+            self._transcript(audit, state)
+            sources = [audit]
+            # Include every run selected during this chat, not other chat sessions.
+            runs = {state['workflow_run']} if state.get('workflow_run') else set()
+            runs.update(state.get('session_runs', []))
+            for relative in sorted(runs - {session}):
+                try:
+                    source = Audit.open(self.workspace, relative)
+                    if source.load().get('run_kind') != 'chat':
+                        sources.append(source)
+                except (ForgeError, OSError):
+                    lines.append(f'Unavailable run: {relative}')
+            for source in sources:
+                lines.extend(['## ' + source.path.relative_to(self.workspace.root).as_posix(), ''])
+                saved = source.load()
+                lines.append(json.dumps({key: saved.get(key) for key in
+                                         ('status', 'provider', 'model', 'endpoint')}, indent=2))
+                for name in ('transcript.md', 'events.jsonl', 'progress.json'):
+                    if (source.path / name).is_file():
+                        lines.extend(['', '### ' + name, '', source.read(name)])
+                for path in sorted((source.path / 'calls').glob('*')):
+                    if path.is_file() and path.name.endswith(('-usage.json', '-output.txt', '-partial.txt')):
+                        lines.extend(['', '### calls/' + path.name, '', source.read('calls/' + path.name)])
+            name = 'session-logs-' + uuid.uuid4().hex[:10] + '.md'
+            content = '\n'.join(lines) + '\n'
+            relative = '.forge/logs/' + audit.path.name + '-' + name
+            export = self.workspace.path(relative, write=True, internal=True)
+            atomic_write(export, content)
+            audit.write(name, content)
+            result = 'Session logs exported to ' + relative + '\nOpen file: ' + str(export)
+            state['messages'].extend([{'role': 'user', 'content': '/logs'},
+                                      {'role': 'assistant', 'content': 'Forge workflow\nSession logs exported to ' + relative}])
+            state['updated_at'] = now()
+            audit.save(state)
+            self._transcript(audit, state)
+            audit.event('chat_logs_exported', path=relative)
+        data = self.get(session) | {'command_error': None, 'logs_path': relative}
+        # Display the diagnostics, while keeping repeated exports out of saved history.
+        data['messages'] = [*data['messages'][:-1], {'role': 'assistant', 'content': 'Forge workflow\n' + result}]
+        return data
 
     @staticmethod
     def _transcript(audit: Audit, state: dict) -> None:

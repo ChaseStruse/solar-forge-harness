@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import tomllib
 
 from .context import bundled_guidance
@@ -44,7 +45,15 @@ def ask(label: str, default: str = '') -> str:
         print('Please enter a value.')
 
 
-def choice(label: str, options: tuple[str, ...], default: str) -> str:
+def choice(label: str, options: tuple[str, ...], default: str, labels=None) -> str:
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        from prompt_toolkit.shortcuts import radiolist_dialog
+        result = radiolist_dialog(title=label, text='Up/Down to select, Tab to confirm, Enter to accept.',
+                                  values=[(value, labels[index] if labels else value) for index, value in enumerate(options)],
+                                  default=default).run()
+        if result is None:
+            raise KeyboardInterrupt
+        return result
     while True:
         value = ask(label, default).lower()
         if value in options:
@@ -101,6 +110,14 @@ def choose_languages(workspace: Workspace) -> list[str]:
     detected = detect_languages(workspace)
     default = ', '.join(detected) or 'generic'
     print('Detected from up to 500 project paths: ' + language_summary(detected))
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        from prompt_toolkit.shortcuts import checkboxlist_dialog
+        result = checkboxlist_dialog(title='Coding standards', text='Up/Down to move, Space to toggle, Tab then Enter to confirm. Empty means generic.',
+                                     values=[(name, name.title()) for name in ('python', 'typescript', 'javascript')],
+                                     default_values=detected).run()
+        if result is None:
+            raise KeyboardInterrupt
+        return select_languages(result or ['generic'])
     print('Choose python, typescript, javascript, or generic. Separate multiple languages with commas.')
     while True:
         value = ask('Coding standards', default).lower()
@@ -114,7 +131,7 @@ def guided_config(workspace: Workspace, languages: list[str] | None = None) -> C
     print('\n1 of 4: Choose your model service')
     for number, (_, label, _, _) in enumerate(PROVIDERS, 1):
         print(f'  {number}. {label}')
-    selected = choice('Choose a number', ('1', '2', '3', '4'), '1')
+    selected = choice('Model service', ('1', '2', '3', '4'), '1', [item[1] for item in PROVIDERS])
     kind, _, base_url, key_env = PROVIDERS[int(selected) - 1]
     print('Use the model name from your service or your installed local models.')
     while True:
@@ -152,7 +169,7 @@ def guided_config(workspace: Workspace, languages: list[str] | None = None) -> C
     print('RAG finds relevant passages from local documents for your model, with source citations.')
     print('After setup, run forge index (or /index in chat) to build the document library.')
     print('  1. Enable local document search\n  2. Set up later')
-    storage = choice('Choose a number', ('1', '2'), '2')
+    storage = choice('Document search', ('1', '2'), '2', ['Enable local document search', 'Set up later'])
     rag = RagConfig()
     if storage == '1':
         rag = RagConfig('local', ask_folder(workspace, 'Storage folder path', '.forge/rag', rag=True))
@@ -187,6 +204,9 @@ def initialize(workspace: Workspace, *, interactive: bool, languages: list[str] 
     # Gather choices before writing so cancelling a prompt leaves no setup files.
     print('\nSetup files:')
     create(workspace, '.forge/config.toml', render_config(config), internal=True)
+    logs = workspace.path('.forge/logs', write=True, internal=True)
+    logs.mkdir(parents=True, exist_ok=True)
+    print('Logs folder: .forge/logs/')
     created_config = not existing
     if created_config:
         docs_folder = config.docs[-1]

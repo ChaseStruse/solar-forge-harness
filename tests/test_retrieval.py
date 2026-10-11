@@ -231,7 +231,8 @@ class RetrievalTests(unittest.TestCase):
         service = ChatService(self.ws, self.cfg, provider)
         session = service.new()['id']
         service.send(session, 'billing refunds')
-        self.assertIn('"status": "missing"', provider.calls[0][0])
+        supplied = json.loads(provider.calls[0][0].split('\nProject context:\n', 1)[1])
+        self.assertEqual(supplied['retrieval']['status'], 'missing')
         audit = prepare(self.ws, self.cfg, DEFAULT_REQUEST, ScriptedProvider({'questions': []}))
         self.assertEqual(json.loads(audit.read('context.json'))['retrieval']['status'], 'missing')
         build_index(self.ws, self.cfg)

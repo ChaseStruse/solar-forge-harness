@@ -16,11 +16,20 @@ from .retrieval import build_index, index_status, search, record_search, format_
 
 from .progress import read_progress, format_progress
 
-HELP = '''Work on a request here in chat:
+ADVANCED_HELP = '''Normal flow: /start → answer any questions → review plan → /approve.
+Use /next to continue or retry. Advanced stage commands remain available.
+
+Work on a request here in chat:
+  /start [FILE]      Prepare, ask blocking questions, and build the plan in one flow
   /requests          List request bundles and latest run status
   /select NUMBER     Select a request from /requests
   /edit-request      Open the selected request for editing
   /edit FIELD TEXT   Edit title, description, technical_details, or acceptance_criteria
+  /settings          Adjust model, timeout, and limits in chat
+  /history [QUERY]   Search saved conversations, requests, and errors
+  /recover           Choose retry, timeout settings, or log export
+  /review            Open the current reviewed plan screen
+  /logs              Export current chat and linked run diagnostics
   /context           Inspect included context and prompt budget
   /index             Build or refresh the local document library
   /search QUERY      Find reference passages with source citations
@@ -48,8 +57,62 @@ HELP = '''Work on a request here in chat:
 
 Ordinary messages go to your model, except while drafting a request or recording
 an answer. Use /ask then if you want advice instead of saving an answer.
+In Forge chat, commands needing a missing request/run show a request picker.
+Use Up/Down and Enter to select, or Escape to cancel. A sole request resolves
+automatically for request-only actions. Requests without a run need /prepare first.
 Paths with spaces can be wrapped in quotes. Commands act on the selected run.
 Model replies cannot approve a plan or execute commands.'''
+
+PRIMARY_COMMANDS = ('/request', '/start', '/next', '/approve', '/ask', '/changes',
+                    '/status', '/history', '/settings', '/recover', '/logs', '/help', '/advanced')
+HELP = """Understand → Review → Develop → Check
+
+  /request           Describe a new task
+  /start             Choose a request and prepare its plan
+  /next              Continue or retry the saved step
+  /approve           Start development after reviewing the plan
+  /ask TEXT          Ask for advice
+  /changes           Check the saved edits
+  /status            See results and recorded checks
+  /history [QUERY]   Find previous work
+  /settings          Adjust model and limits
+  /recover           Choose a recovery action
+  /logs              Export diagnostics
+  /help              Show everyday actions
+  /advanced          Show individual stages and other tools
+
+F2 opens a labeled Continue action. Approval always requires /approve.
+Type / for everyday commands; type a command prefix to find advanced tools.
+"""
+
+
+def continue_action(state: dict | None) -> tuple[str, str]:
+    """Describe the next safe action without implicitly approving development."""
+    state = state or {}
+    if state.get('pending_message'):
+        return 'Recover the pending reply', '/recover'
+    if state.get('request_draft'):
+        if state['request_draft']['stage'] == 'review':
+            return 'Save your request', '/save-request'
+        return 'Answer the request prompt', ''
+    if state.get('answering'):
+        return 'Finish your answer', ''
+    if state.get('run_status') == 'awaiting_answers':
+        return 'Answer a question', '/answer'
+    if state.get('run_status') == 'turn_limit' and state.get('run_turns', 0) >= state.get('max_turns', 0):
+        return 'Increase the development turn limit', '/settings'
+    if state.get('reviewed_plan'):
+        return 'Review the plan', '/review'
+    if state.get('run_status') in {'planned', 'interrupted', 'executing', 'turn_limit'}:
+        return 'Review the plan', '/run'
+    if state.get('run_status') in {'review_required', 'completed'}:
+        return 'Check development results', '/status'
+    if state.get('run_status') == 'discovering':
+        return 'Retry preparation', '/next'
+    if state.get('run_status') == 'ready_to_plan':
+        return 'Build the plan', '/next'
+    return 'Choose a request and start', '/start'
+
 
 NEXT = {
     'discovering': 'Preparation did not finish. Use /discover to retry.',
@@ -86,10 +149,17 @@ def workflow_hint(workspace: Workspace, state: dict) -> str:
         return 'Review the plan. /approve starts coding; /ask asks for help.'
     if state.get('workflow_run'):
         try:
+            if state.get('guided_workflow'):
+                status = Audit.open(workspace, state['workflow_run']).load()['status']
+                return {'discovering': 'Preparation stopped. /next retries the saved step.',
+                        'awaiting_answers': 'Answer the question to continue; /ask helps.',
+                        'ready_to_plan': 'Ready to build the plan. /next continues.',
+                        'planned': 'Review your plan. /approve starts development.',
+                        'interrupted': 'Development stopped. /next opens review before resuming.'}.get(status, NEXT.get(status, 'Use /status for results.'))
             return NEXT.get(Audit.open(workspace, state['workflow_run']).load()['status'], 'Use /status for progress.')
         except (ForgeError, OSError):
             return 'Selected run is unavailable. Use /runs to choose another.'
-    return 'Start with /request or /prepare. Use /runs to continue existing work; /help lists commands.'
+    return 'Start: /start. New idea: /request. Resume or retry: /next. Help: /help.'
 
 
 class ChatWorkflow:
@@ -118,10 +188,12 @@ class ChatWorkflow:
                 self.state.pop('reviewed_plan', None)
                 self.state.pop('answering', None)
             self.state['workflow_run'] = relative
+            if relative not in self.state.setdefault('session_runs', []):
+                self.state['session_runs'].append(relative)
             self.state['request_path'] = audit.load()['request_path']
             return audit
         if not self.state.get('workflow_run'):
-            raise ForgeError('Choose a run with /runs and /use NUMBER, or start one with /prepare.')
+            raise ForgeError('This request has no selected run yet. Use /prepare to find questions before planning, or /runs to choose an existing run.')
         return Audit.open(self.workspace, self.state['workflow_run'])
 
     def check_model(self, audit: Audit) -> None:
@@ -179,6 +251,40 @@ class ChatWorkflow:
         return 'Coding runs:\n\n' + '\n'.join(
             f'{i}. {state["title"]} — {state["status"]}\n   {relative}'
             for i, (relative, state) in enumerate(runs, 1)) + '\n\nUse /use NUMBER to continue a run.'
+
+    def request_options(self) -> list[dict]:
+        latest = {}
+        for audit in sorted(Audit.discover(self.workspace), key=lambda a: a.load()['created_at']):
+            state = audit.load()
+            if state.get('run_kind') != 'chat' and state.get('request_path'):
+                latest[state['request_path']] = (audit, state)
+        options = []
+        for path in sorted(self.workspace.path(ROOT, internal=True).glob('*/request.md')):
+            name = path.relative_to(self.workspace.root).as_posix()
+            try:
+                title = Request.parse(read_request(self.workspace, name)).title
+            except (ForgeError, OSError):
+                continue
+            run = latest.get(name)
+            options.append({'path': name, 'title': title,
+                            'status': run[1]['status'] if run else 'not prepared',
+                            'run': run[0].path.relative_to(self.workspace.root).as_posix() if run else None})
+        return options
+
+    def choose_request(self, name: str) -> str:
+        if self.state.get('request_draft') or self.state.get('answering'):
+            raise ForgeError('Finish or /cancel the current prompt before selecting another request.')
+        choice = next((item for item in self.request_options() if item['path'] == name), None)
+        if choice is None:
+            raise ForgeError('That request is no longer available. Reopen the request picker.')
+        self.state['request_path'] = name
+        for key in ('workflow_run', 'reviewed_plan', 'answering'):
+            self.state.pop(key, None)
+        if choice['run']:
+            self.selected(choice['run'])
+        self.chat.event('chat_request_selected', request_path=name, run=choice['run'])
+        return f'Selected {choice["title"]}. ' + (
+            'Existing run selected.' if choice['run'] else 'Not prepared yet. Use /prepare to find questions before planning.')
 
     def requests(self, value: str = '') -> str:
         if value:
@@ -324,7 +430,42 @@ class ChatWorkflow:
         self.state.pop('workflow_run', None)
         self.state.pop('reviewed_plan', None)
         self.state.pop('answering', None)
-        return f'Saved {name}. Use /prepare to find any questions before coding, or ask your model for help.'
+        return f'Saved {name}. Use /start to prepare it and build your plan in one flow.'
+
+    def advance(self, value: str = '') -> str:
+        """Continue until human input or review is needed; never approve coding."""
+        self.state['guided_workflow'] = True
+        if value or not self.state.get('workflow_run'):
+            self.prepare_request(value)
+        audit = self.selected()
+        self.check_model(audit)
+        if self.cancelled and self.cancelled():
+            raise ForgeError('Stopped by user. Progress is saved; /next resumes.')
+        status = audit.load()['status']
+        if status in {'discovering', 'ready_to_plan'}:
+            try:
+                assert_current(self.workspace, self.config, audit)
+            except ForgeError as exc:
+                raise ForgeError(str(exc) + ' Use /start "' + audit.load()['request_path'] + '" for fresh preparation.') from exc
+        if status == 'discovering':
+            with audit.lock():
+                discover(audit, self.provider, self.config.max_prompt_bytes)
+            status = audit.load()['status']
+        if status == 'awaiting_answers':
+            return '1/3 · Understand the request\nAnswer the blocking question below. The plan follows automatically.\n\n' + self.answer('')
+        if status == 'ready_to_plan':
+            if self.cancelled and self.cancelled():
+                raise ForgeError('Stopped by user. Progress is saved; /next resumes.')
+            with audit.lock():
+                self.state.pop('reviewed_plan', None)
+                plan(self.workspace, self.config, audit, self.provider)
+            status = audit.load()['status']
+        if status in {'planned', 'executing', 'interrupted', 'turn_limit'}:
+            with audit.lock():
+                self.state.pop('answering', None)
+                result = self.review(audit)
+            return '2/3 · Review the plan\nPreparation is complete. /approve starts development; /ask discusses the plan.\n\n' + result
+        return '3/3 · Development results\n\n' + self.status(audit)
 
     def prepare_request(self, value: str) -> str:
         words = shlex.split(value) if value else [current_request(self.workspace, self.state.get('request_path'))]
@@ -333,6 +474,7 @@ class ChatWorkflow:
         def created(audit):
             self.state['request_path'] = audit.load()['request_path']
             self.state['workflow_run'] = audit.path.relative_to(self.workspace.root).as_posix()
+            self.state.setdefault('session_runs', []).append(self.state['workflow_run'])
             self.state.pop('reviewed_plan', None)
             self.state.pop('answering', None)
             # Keep the run discoverable in this chat even if the provider call fails.
@@ -358,6 +500,8 @@ class ChatWorkflow:
             self.state.pop('answering', None)
         if any(not q.get('answer') for q in audit.load()['questions']):
             return 'Answer saved.\n\n' + self.answer('')
+        if self.state.get('guided_workflow'):
+            return 'All answers saved. Creating your plan…\n\n' + self.advance()
         return 'All answers saved. Use /plan to create your coding plan.'
 
     def review(self, audit: Audit) -> str:
@@ -392,6 +536,8 @@ class ChatWorkflow:
             self.chat.save(self.state)
             run(self.workspace, self.config, audit, self.provider, cancelled=self.cancelled)
         result = self.status(audit)
+        if self.state.get('guided_workflow'):
+            result = '3/3 · Development results\n\n' + result
         if audit.load()['status'] == 'review_required':
             result += '\n\nACTUAL SAVED CHANGES\n' + self.changes('')
         return result
@@ -419,6 +565,8 @@ class ChatWorkflow:
             return self.edit_field(value)
         if command == '/help':
             return HELP
+        if command == '/advanced':
+            return ADVANCED_HELP
         if command == '/cancel':
             for key in ('request_draft', 'answering', 'reviewed_plan'):
                 self.state.pop(key, None)
@@ -443,7 +591,10 @@ class ChatWorkflow:
             return self.changes(value)
         if self.state.get('request_draft'):
             raise ForgeError('Finish or /cancel your request draft before starting the coding workflow. Use /ask for advice.')
+        if command == '/start':
+            return self.advance(value)
         if command == '/prepare':
+            self.state.pop('guided_workflow', None)
             return self.prepare_request(value)
         if command == '/answer':
             return self.answer(value)
@@ -454,11 +605,7 @@ class ChatWorkflow:
         if command == '/next':
             if value:
                 raise ForgeError('Use /next without arguments.')
-            if not self.state.get('workflow_run'):
-                return self.prepare_request('')
-            status = self.selected().load()['status']
-            command = {'discovering': '/discover', 'awaiting_answers': '/answer', 'ready_to_plan': '/plan',
-                       'planned': '/run', 'executing': '/run', 'interrupted': '/run'}.get(status, '/status')
+            return self.advance()
         if command in {'/discover', '/plan', '/run'}:
             audit = self.selected(value)
             self.check_model(audit)

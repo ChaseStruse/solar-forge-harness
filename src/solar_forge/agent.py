@@ -6,13 +6,18 @@ import json
 from .audit import Audit, now
 from .domain import Config, ForgeError
 from .providers import Provider
+from .prompts import prompt_json
 from .workflow import SYSTEM, assert_current, call, parse_json, payload, plan_digest, questions_from
 from .workspace import Workspace
 from .verification import run_check, review_checks
 from .retrieval import search, record_search, context_sources, storage_path, policy
 
 TOOLS = """
-Execute the approved plan one action at a time. Return one JSON object:
+Execute the approved plan with the smallest useful next action. Return one JSON object.
+Use supplied inventory and prior tool results; do not relist unchanged paths or
+reread unchanged content already available. Keep summaries brief; do not repeat
+request or policy text. Read files when needed to make a safe edit.
+Allowed actions:
 {"tool":"list_files"}
 {"tool":"read_file","path":"project-relative/file"}
 {"tool":"search_docs","query":"specific reference question"}
@@ -172,7 +177,7 @@ def run(workspace: Workspace, config: Config, audit: Audit, provider: Provider, 
     audit.event('execution_started')
     content = payload(audit, state)
     content['approved_plan'] = (audit.path / 'plan.md').read_text()
-    system = SYSTEM + TOOLS + '\nRun context:\n' + json.dumps(content)
+    system = SYSTEM + TOOLS + '\nRun context:\n' + prompt_json(content)
     if not state['messages']:
         state['messages'] = [{'role': 'user', 'content': 'Begin the approved plan. Inspect relevant files first.'}]
     try:
@@ -188,7 +193,7 @@ def run(workspace: Workspace, config: Config, audit: Audit, provider: Provider, 
                     action = parse_json(text)
                 except ForgeError as exc:
                     audit.event('action_rejected', error=str(exc), turn=state['turns'])
-                    state['messages'].append({'role': 'user', 'content': json.dumps({'error': str(exc)})})
+                    state['messages'].append({'role': 'user', 'content': prompt_json({'error': str(exc)})})
                     audit.save(state)
                     continue
                 state['pending_action'] = action
@@ -203,7 +208,7 @@ def run(workspace: Workspace, config: Config, audit: Audit, provider: Provider, 
             except (ForgeError, OSError) as exc:
                 result = {'error': str(exc)}
                 audit.event('tool_rejected', turn=state['turns'], error=str(exc))
-            state['messages'].append({'role': 'user', 'content': json.dumps(result)})
+            state['messages'].append({'role': 'user', 'content': prompt_json(result)})
             state.pop('pending_action', None)
             audit.save(state)
             if state['status'] != 'executing':

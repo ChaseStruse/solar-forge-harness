@@ -68,10 +68,11 @@ def action_label(action):
 FINAL_LABELS = {'questions_generated': 'Discovery complete', 'plan_generated': 'Plan ready for review',
                 'review_requested': 'Review required', 'execution_questions_generated': 'Awaiting answers',
                 'turn_limit_reached': 'Turn limit reached', 'execution_interrupted': 'Interrupted',
-                'chat_reply_recorded': 'Reply saved', 'chat_reply_failed': 'Reply failed'}
+                'chat_reply_recorded': 'Reply saved', 'chat_reply_failed': 'Reply failed',
+                'chat_command_finished': 'Command finished', 'chat_command_failed': 'Command failed'}
 EVENTS = {'created', 'chat_created', 'provider_call_started', 'provider_call_finished', 'provider_call_failed',
           'tool_attempted', 'tool_result', 'tool_rejected', 'action_rejected', 'file_written',
-          'verification_started', 'verification_finished', 'execution_started'} | set(FINAL_LABELS)
+          'verification_started', 'verification_finished', 'execution_started', 'chat_command_started'} | set(FINAL_LABELS)
 
 
 def update_progress(audit, event):
@@ -97,6 +98,8 @@ def update_progress(audit, event):
 
     if kind == 'chat_created':
         data['scope'] = 'Chat'
+    elif kind == 'chat_command_started':
+        start('Running ' + event.get('command', 'command'))
     elif kind == 'execution_started':
         # A previous hard interruption has no reliable end timestamp. Never
         # count time spent away from Forge as active work.
@@ -111,6 +114,8 @@ def update_progress(audit, event):
             data['history_limited'] = True
         data['active_since'] = at
         data['action'] = 'Waiting for model'
+        data['last_prompt_bytes'] = event.get('prompt_bytes')
+        data['last_prompt_at'] = at
         data['usage']['calls'] += 1
     elif kind in {'provider_call_finished', 'provider_call_failed'}:
         stop()

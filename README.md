@@ -89,6 +89,11 @@ Forge walks you through four steps:
    TypeScript, JavaScript, or a comma-separated combination. Choose `generic` for
    general guidance. Forge creates editable standards in `.forge/standards/coding.md`.
 
+Interactive setup uses scrollable menus for model service, document-search mode,
+yes/no choices, and language standards. Use arrow keys to move, Space to toggle
+language selections, and Tab/Enter to confirm. Model names, addresses, and custom
+folder paths remain text entries. Noninteractive setup still works.
+
 Setup creates `agentic_audit/requests/default/request.md`, `.forge/config.toml`, and editable guidance in
 `.forge/standards/`. It ends with a list of created or preserved files, your
 selected settings, and instructions for your first chat. Existing files are
@@ -144,8 +149,10 @@ existing coding runs.
 To start, run `forge chat` and type `/request`. Forge guides you through the
 title, description, details, and results you want. Use `/ask` followed by a
 question whenever you need model advice. Type `/save-request` to save the draft,
-then `/prepare`, `/answer` if questions are needed, and `/plan`. Read the plan
-and type `/approve` when you are ready for coding. Press Enter to send and
+then `/start`. Forge prepares the request, asks any blocking questions one at a
+time, and creates the plan automatically. Answer questions directly; use `/ask`
+for advice. Read the plan and type `/approve` when ready for development.
+Use `/next` to continue or retry the saved step without starting another run. Press Enter to send and
 Ctrl-Q to leave chat. You can also edit the request bundle’s `request.md` directly.
 
 Customize the project guidance and replace the request template, for example:
@@ -242,7 +249,8 @@ multiline composer. No browser or local web server is needed.
 
 | Key | Action |
 | --- | --- |
-| Enter | Send the message; open the selected chat when history is focused |
+| Enter | Accept an active command suggestion; otherwise send the message or open the selected chat |
+| Tab with suggestions open | Fill the selected slash command; `/r` suggests `/request` first |
 | Alt+Enter (or Ctrl+J) | Insert a newline in the composer |
 | Tab / Shift+Tab | Move between panes |
 | Arrow keys | Move within the focused pane or select a saved chat |
@@ -271,6 +279,7 @@ You can complete the request workflow in this window:
 | `/select NUMBER` | Select a bundle from `/requests` |
 | `/edit-request` | Open the selected request for editing |
 | `/edit FIELD TEXT` | Update `title`, `description`, `technical_details`, or `acceptance_criteria` in a draft |
+| `/logs` | Export current chat diagnostics and linked coding run events/responses to a Markdown file in `.forge/logs`, with a retained audit copy; works after failed replies, without a model call |
 | `/context` | Inspect included documents, retrieval, exclusions, and prompt bytes; warns at 80% of the limit |
 | `/index` | Build or refresh the local reference library |
 | `/search QUERY` | Search reference passages with source citations, without a model call |
@@ -279,6 +288,7 @@ You can complete the request workflow in this window:
 | `/request [TITLE]` | Draft a request bundle, one question at a time |
 | `/request show` | Read the current request |
 | `/save-request` | Save the finished draft; saves to the title’s request folder, with an explicit replacement notice if it exists |
+| `/start [FILE]` | Prepare, resolve blocking questions, and build/review the plan; an explicit request path starts a fresh run |
 | `/prepare [FILE]` | Find questions in a request (selected request in chat, otherwise the only request bundle) |
 | `/answer` | Record answers one at a time |
 | `/answer Q1 TEXT` | Record a specific answer |
@@ -289,11 +299,22 @@ You can complete the request workflow in this window:
 | `/changes [FILE]` | Review saved file diffs |
 | `/runs`, then `/use NUMBER` | Continue an existing coding run, including one started with the CLI |
 | `/discover` | Retry failed preparation for the selected run |
-| `/next` | Take the next available step; coding still requires `/approve` |
+| `/next` | Continue or retry the continuous workflow until an answer or plan review is needed; coding still requires `/approve` |
 | `/ask TEXT` | Ask your model for advice at any step |
 | `/discard-pending` | Discard a failed model message; return it to the composer for editing and continue the same chat |
 | `/cancel` | Leave request drafting, question answering, or plan review |
 | `/help` | Show all available actions |
+
+In Forge chat, `/plan`, `/run`, `/discover`, `/answer`, `/changes`, and `/approve`
+open a request picker when no run is selected. `/prepare`, `/edit-request`,
+`/request show`, `/start`, and `/next` also open it when the request is ambiguous. Use
+**Up/Down** to choose a request, **Enter** to confirm, or **Escape** to cancel.
+Each entry shows the request title and latest run status. Selecting a request
+resumes its latest coding run and continues your command. If it has no run yet,
+the composer offers `/prepare` first. Choosing a request for `/approve` displays
+the plan for review; enter `/approve` again after reviewing it to start coding.
+Explicit paths and existing selections still work, and a sole request resolves
+automatically for request-only commands.
 
 To continue an existing run, use `/runs`, then `/use` with its displayed
 number. You can then enter `/plan`, ask questions about the plan, and enter
@@ -627,3 +648,76 @@ Review labels distinguish proposed work from actual saved diffs shown after codi
 Approval remains explicit. Ctrl+X stops at a safe boundary; an active network read
 may finish or time out first. Partial replies are stored in the call audit and
 remain retryable/discardable, never treated as completed answers or tool actions.
+
+If a local model times out during `/prepare`, increase `timeout` under `[provider]`
+in `.forge/config.toml`, for example `timeout = 600`, and restart Forge before
+retrying `/discover`. Non-streaming preparation waits for the final answer; a
+reasoning model may spend the full timeout thinking. Reducing reasoning in the
+model server can also help. `forge init` creates `.forge/logs`. `/logs` exports session evidence there for troubleshooting
+(including conversation text, so review it before sharing). It does not collect
+LM Studio server logs or API credentials.
+
+Forge chat uses a cyberpunk palette: midnight panels, neon cyan user messages,
+soft lavender model replies, mint workflow results, amber activity, and magenta
+frame titles and menu selections. Type `/` to open command suggestions, use Up/Down to choose,
+and Tab or Enter to fill a command. The popup shows command descriptions and
+scrolls through longer lists with the arrow keys. Press Enter again to send it. Complete
+commands and command arguments do not trigger suggestions.
+
+Workflow commands appear in the conversation as soon as they start. The Activity
+panel shows a timestamped list of recent events, including command start, model
+wait, completion, and failure, while the command is running. For non-streaming
+provider calls, answer text appears after completion; activity is live. `/discover`
+retries unfinished preparation; after successful planning, use `/run` to review
+the plan and `/approve` to start coding.
+
+Structured workflow calls use a concise JSON-only instruction instead of the full
+conversational personality guide. Discovery asks only unresolved questions that
+block a correct implementation; planning stays proportional to the request, and
+coding is instructed to reuse supplied inventory and unchanged prior tool results.
+Conversational chat retains the configured Forge personality.
+
+Prompt context references exact duplicate document bodies by their canonical
+source path, preferring project guidance to bundled copies. Distinct or conflicting
+guidance is preserved in full, and complete original snapshots remain in the audit.
+Provider payloads and embedded context use compact UTF-8 JSON. These changes reduce
+prompt overhead without truncating conversation history or weakening approval and
+verification checks. Actual token savings and response latency depend on the model.
+
+Forge chat includes these workspace controls:
+
+- `/settings` opens a selectable menu for model, timeout, turn limit, and file,
+  context, and prompt byte limits. Choose a field, type its value, and press Enter.
+  `/settings timeout 600` also works. Values are validated and saved to
+  `.forge/config.toml`, then applied immediately. Changing models starts a new
+  conversation; old conversations and coding runs retain their original model.
+- `/recover` opens retry, timeout adjustment, and log-export actions. It also opens
+  automatically after a timeout. Recovery keeps pending messages and existing
+  runs; coding always requires plan review and explicit `/approve`.
+- `/history QUERY` searches saved chat text, pending messages, recorded errors,
+  request titles, and request content. Choose a conversation to reopen or a request
+  to select. `/history` lists up to 50 matching chats/requests.
+- `/plan` and `/run` open a scrollable plan review panel. `/review` reopens it.
+  Tab focuses the panel for scrolling, Escape closes it, and the composer remains
+  available for `/ask`, `/plan`, or explicit `/approve`. The panel shows the saved
+  plan, including affected files, verification, and risks when supplied.
+
+The persistent status strip shows the selected request, run identifier, stage,
+and next action. A usage strip shows the latest recorded prompt byte size against
+the current budget and reported input/output token totals for the chat and selected
+run. Bytes are the harness's prompt representation, not tokenizer counts; providers
+that omit usage are shown as unavailable. Unreported tokens are not estimated.
+
+The primary Forge chat workflow is **`/start` → answer any blocking questions →
+review the plan → `/approve`**. Preparation includes discovery; it is not a
+separate user step. If there are no questions, Forge creates the plan in the same
+action. The final answer triggers planning automatically. Progress and provider
+calls remain visible throughout. `/next` resumes or retries the current saved
+stage and stops for human input or review; it never approves development.
+
+`/start` resumes the selected run. `/start agentic_audit/requests/NAME/request.md`
+starts fresh preparation explicitly, for example after editing a request or project
+guidance. Finished runs show their saved results. `/prepare`, `/discover`, `/answer`,
+`/plan`, and `/run` remain available as advanced individual-stage controls.
+
+See the [Forge chat user flow](docs/chat-user-flow.md) for the everyday commands, Continue action, and workflow diagram.
