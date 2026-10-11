@@ -213,6 +213,21 @@ contracts follow the official [OpenAI Responses reference](https://developers.op
 [Claude Messages reference](https://platform.claude.com/docs/en/api/messages/create),
 and [Ollama chat reference](https://docs.ollama.com/api/chat).
 
+## Model personality
+
+Forge uses a shared personality across every provider: a warm, capable teammate
+with dry wit, light sarcasm, and occasional friendly teasing. The voice is defined
+in [guidance/personality.md](src/solar_forge/guidance/personality.md) and used in
+chat, discovery, planning, and coding prompts. No Ollama Modelfile or model rebuild
+is needed. For example: “You built a small bureaucracy around a boolean. We can
+simplify this.” Examples guide the tone rather than serving as repeated catchphrases.
+
+Useful answers come first. Humor becomes quieter during frustration, serious
+failures, or sensitive discussions. Ask for “no jokes” or another tone to adjust
+conversation style. Structured workflows still require valid JSON, precise tools,
+explicit approval, and real verification evidence; personality does not change
+those rules. Generated humor and adherence depend on the selected model.
+
 ## Chat with your model
 
 Once you have configured `provider.kind` and `provider.model`, run:

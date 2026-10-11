@@ -11,6 +11,7 @@ The UI, workflow rules, transport, and file operations have separate modules.
 | --- | --- |
 | `cli.py` | Parse commands, display artifacts, prompt for answers and approval |
 | `domain.py` | Validate request headings and TOML configuration |
+| `personality.py` | Load the shared packaged voice for chat and structured model prompts |
 | `standards.py` | Bounded language detection and composition of packaged coding-standard templates |
 | `context.py` | Load explicit documentation and bundled guidance with provenance |
 | `retrieval.py` | Local passage index, ranked search, freshness checks, citations and retrieval evidence |
@@ -207,3 +208,13 @@ injected into model prompts. Guidance files are created exclusively, preserving
 existing bytes on repeat setup. Missing coding guidance is restored from the saved
 selection. Conflicting language flags on existing configuration fail before writes.
 All interactive choices are gathered before setup creates files.
+
+## Shared model voice
+
+`guidance/personality.md` is loaded by `personality.py` and prefixed to the chat
+and structured-workflow system prompts. Provider adapters continue to receive the
+same system/messages contract. Existing prompt-call audit records capture the
+exact personality text used for each call. The task-specific instructions follow
+the personality and retain JSON-only output, approval, and evidence requirements.
+Personality is conversational guidance; it does not execute actions or replace
+project coding standards. Scripted tests verify integration, not live-model tone.
