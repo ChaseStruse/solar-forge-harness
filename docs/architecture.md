@@ -11,10 +11,15 @@ The UI, workflow rules, transport, and file operations have separate modules.
 | --- | --- |
 | `cli.py` | Parse commands, display artifacts, prompt for answers and approval |
 | `domain.py` | Validate request headings and TOML configuration |
+| `progress.py` | Event-derived activity snapshots, observer delivery, elapsed work and usage summaries |
+| `personality.py` | Load the shared packaged voice for chat and structured model prompts |
+| `standards.py` | Bounded language detection and composition of packaged coding-standard templates |
 | `context.py` | Load explicit documentation and bundled guidance with provenance |
+| `retrieval.py` | Local passage index, ranked search, freshness checks, citations and retrieval evidence |
 | `providers.py` | Normalize HTTP transports behind `Provider.complete` |
 | `workflow.py` | Discovery, questions, answers, planning, context consistency |
 | `agent.py` | Approved execution, action validation, write journal and recovery |
+| `verification.py` | Named trusted command execution, process limits, evidence and recovery |
 | `workspace.py` | Project path boundaries, size checks, inventory, atomic writes |
 | `audit.py` | Run directories, checkpoints, events, artifacts, per-run locks |
 | `chat.py` | Conversation and explicit workflow actions, pending-turn retry, transcripts, session history |
@@ -129,13 +134,112 @@ or cryptographically chained log. State is the recovery authority; event records
 may repeat around interrupted actions. The audit is reviewable project evidence,
 not a tamper-proof compliance ledger. Exact byte snapshots preserve UTF-8 CRLF.
 
+## Local retrieval
+
+Core guidance remains in `harness.docs`. Optional `rag.sources` define a separate
+library; empty sources fall back to the existing document list. The standard-library
+retrieval module chunks supported text files into bounded passages with path, line
+range, and source hash. A versioned JSON index is written atomically; a checksum
+catches accidental corruption. This is not a tamper-proof or encrypted store.
+Search checks a fresh source manifest before BM25-style lexical ranking. Indexing
+and queries make no provider calls. File count, source bytes, index size, query
+length, result count, and serialized passage-result bytes are bounded.
+
+The CLI exposes index, status, and search without constructing a provider. Chat
+has equivalent commands and automatically retrieves for the current message.
+Preparation retrieves for the request and includes results in its context snapshot.
+Coding agents can use the named `search_docs` action. Retrieval results are saved
+under audit `retrieval/` with query, citations, hashes, and freshness information;
+retrieved paths are accepted as question sources only after they were supplied.
+Prompt instructions treat passages as reference data, never authorization.
+
+Prepared runs bind retrieval policy and source fingerprints. Source/configuration
+changes invalidate preparation even after rebuilding the index. Disabled RAG does
+not affect legacy runs. File tools protect library sources and index storage.
+Always-on guidance retains its independent change checks and prompt budgets.
+Source files are re-read for freshness, so this bounded first version favors
+correctness over large-corpus performance. There are no embeddings, remote data
+connectors, or semantic query expansion.
+
+## Verification execution
+
+Preparation snapshots the validated verification policy into run state. Planning
+appends the exact command configuration to the reviewable plan, whose hash is
+approved before execution. Policy changes invalidate the run. Legacy runs without
+a policy can continue only with verification disabled.
+
+The agent's `run_check` action accepts only a configured name. The POSIX runner
+uses fixed argv with no shell, a minimal environment, project cwd, closed stdin,
+bounded output capture, and process-group termination on timeout or cancellation.
+The model receives the result as tool feedback and can repair code and rerun.
+Checks execute trusted project code with local user permissions; this is not
+filesystem/network isolation. Detached descendants and a hard harness crash can
+outlive normal process-group cleanup. Command side effects are not journaled.
+
+An intent is persisted before spawn and a result before advancing the agent's
+checkpoint. Resuming a completed check reuses its result. An intent with no result
+is reported as interrupted with unknown outcome and is never automatically
+replayed. Checks clear cached file reads because they may modify the workspace.
+Summaries distinguish actual outcomes from model notes and flag results predating
+later agent writes; external edits and check side effects are not tracked by this
+flag. Acceptance criteria still need human review.
+
 ## Next extension points
 
 1. Add OS-isolated read/write and command runners with explicit capabilities,
    timeout/output budgets, and tests proving workspace/network isolation.
 2. Build an acceptance verifier that attaches actual command and artifact
    evidence before transitioning from review to completion.
-3. Add streaming adapters, cancellation, usage reporting, and context retrieval.
+3. Add streaming adapters, cancellation, richer usage/cost reporting, and semantic retrieval.
 4. Add Git and deployment tools with separate reviewable approval records.
 5. Introduce project-level locking and optional coordinated agents only after
    defining ownership of shared files, decisions, and audit artifacts.
+
+## Language standards at initialization
+
+New-project initialization selects supported languages using explicit repeatable
+CLI flags, the interactive fourth setup step, or bounded filename detection in
+noninteractive mode. The selection is persisted as `harness.languages` (an empty
+list means generic). Legacy configurations default to the empty list.
+
+`standards.py` composes generic coding guidance with only the selected packaged
+Python, TypeScript, and JavaScript sections. Init writes that composition to the
+existing `.forge/standards/coding.md` context path; unselected templates are not
+injected into model prompts. Guidance files are created exclusively, preserving
+existing bytes on repeat setup. Missing coding guidance is restored from the saved
+selection. Conflicting language flags on existing configuration fail before writes.
+All interactive choices are gathered before setup creates files.
+
+## Shared model voice
+
+`guidance/personality.md` is loaded by `personality.py` and prefixed to the chat
+and structured-workflow system prompts. Provider adapters continue to receive the
+same system/messages contract. Existing prompt-call audit records capture the
+exact personality text used for each call. The task-specific instructions follow
+the personality and retain JSON-only output, approval, and evidence requirements.
+Personality is conversational guidance; it does not execute actions or replace
+project coding standards. Scripted tests verify integration, not live-model tone.
+
+## Live progress and provider usage
+
+Audit events reduce into a bounded `progress.json` sidecar independently of run
+state. Observer delivery uses a context-local callback scoped to the UI's worker
+invocation; the terminal schedules updates on its event loop. A quarter-second
+refresh updates active elapsed time without repeatedly loading audit histories.
+Callbacks and progress persistence are best-effort and cannot authorize actions
+or overwrite workflow checkpoints. The UI strips control sequences and bounds
+panel line widths; no source contents or raw provider payloads enter the snapshot.
+
+ProviderText preserves the provider's string response interface and attaches
+per-response normalized usage. Ollama's terminal stream frame can carry usage
+without visible text. Usage is persisted with the call outcome even when response
+validation rejects the text. There is no mutable last-response counter on the
+provider, avoiding stale usage across calls. Custom adapters returning plain strings
+remain compatible and show unavailable counts. Claude input normalization includes
+its cache read/write token fields; other adapters use their aggregate input counts.
+
+Active duration accumulates provider-call and tool intervals. Waiting on people is
+excluded. A resumed unfinished interval ends at its last recorded timestamp rather
+than counting the gap as active work. Existing runs lacking snapshots start new
+metrics with an explicit historical-coverage warning. Snapshots do not reconstruct
+old token usage, imply that an abandoned process is alive, or replace saved diffs.

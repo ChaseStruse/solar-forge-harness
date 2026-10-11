@@ -12,12 +12,19 @@ from .providers import Provider, assert_identity, configured_identity
 from .workflow import assert_current, discover, plan, plan_digest, prepare, record_answer
 from .workspace import Workspace
 
+from .retrieval import build_index, index_status, search, record_search, format_result
+
+from .progress import read_progress, format_progress
+
 HELP = '''Work on a request here in chat:
   /requests          List request bundles and latest run status
   /select NUMBER     Select a request from /requests
   /edit-request      Open the selected request for editing
   /edit FIELD TEXT   Edit title, description, technical_details, or acceptance_criteria
   /context           Inspect included context and prompt budget
+  /index             Build or refresh the local document library
+  /search QUERY      Find reference passages with source citations
+  /rag               Inspect document library status
   /continue          Start a linked conversation with a compact saved handoff
   /request           Create a request, one question at a time
   /request show      Read the selected request
@@ -52,7 +59,7 @@ NEXT = {
     'executing': 'Use /run to review and resume this run after its active process finishes.',
     'interrupted': 'Coding stopped. Use /run to review and resume.',
     'turn_limit': 'Turn limit reached. Increase max_turns in settings and reopen chat, or start a new run.',
-    'review_required': 'Coding finished. Use /changes to review edits and /ask for help with the suggested checks. Tests have not been run.',
+    'review_required': 'Coding finished. Use /changes to review edits and /status for the summary and recorded check outcomes. Acceptance criteria need review.',
 }
 
 
@@ -123,6 +130,7 @@ class ChatWorkflow:
     def status(self, audit: Audit) -> str:
         state = audit.load()
         text = f'{state["title"]}: {state["status"]}\nRun: {audit.path.relative_to(self.workspace.root).as_posix()}'
+        text += '\n\n' + format_progress(read_progress(audit), width=160)
         pending = [q for q in state['questions'] if not q.get('answer')]
         if pending:
             text += '\n\nQuestions to answer:\n' + '\n\n'.join(
@@ -362,7 +370,7 @@ class ChatWorkflow:
         assert_current(self.workspace, self.config, audit)
         text = audit.read('plan.md')
         self.state['reviewed_plan'] = {'run': self.state['workflow_run'], 'sha256': file_hash(text)}
-        return ('PROPOSED PLAN — no new edits are authorized yet\nPlan for ' + state['title'] + '\n\n' + text + '\nReview affected files and verification steps above. /approve permits project file edits and starts coding.\nUse /changes to inspect saved changes from earlier execution.'
+        return ('PROPOSED PLAN — no new edits are authorized yet\nPlan for ' + state['title'] + '\n\n' + text + '\nReview affected files and verification steps above. /approve permits project file edits and configured verification commands, and starts coding.\nUse /changes to inspect saved changes from earlier execution.'
                 + ('\nUse /ask to discuss it, /plan to generate a revised plan, or /cancel to leave it unapproved.'
                    if state['status'] == 'planned' else
                    '\nThis resumes saved coding progress. Use /ask to discuss it, or /cancel to leave it paused.'))
@@ -393,6 +401,14 @@ class ChatWorkflow:
             return self.respond(message)
         parts = message.split(maxsplit=1)
         command, value = parts[0].lower(), parts[1].strip() if len(parts) > 1 else ''
+        if command in {'/index', '/search', '/rag'}:
+            if command != '/search' and value:
+                raise ForgeError(f'Use {command} without arguments.')
+            result = (search(self.workspace, self.config, value) if command == '/search' else
+                      build_index(self.workspace, self.config) if command == '/index' else
+                      index_status(self.workspace, self.config))
+            record_search(self.chat, result)
+            return format_result(result)
         if command == '/requests':
             return self.requests()
         if command == '/select':

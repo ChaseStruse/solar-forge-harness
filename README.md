@@ -73,7 +73,7 @@ Run inside the project you want the agent to work on:
 forge init
 ```
 
-Forge walks you through three steps:
+Forge walks you through four steps:
 
 1. **Choose your model service.** Pick Ollama, OpenAI, Claude, or an
    OpenAI-compatible server. Enter your model name, keep or change the service
@@ -82,10 +82,12 @@ Forge walks you through three steps:
 2. **Choose your documents folder.** Enter an existing folder inside the project,
    or let Forge create `docs/` at the project root. Absolute paths inside the
    project work too. Existing documents are kept.
-3. **Choose future document search storage (RAG).** Reserve a local folder
-   (default: `.forge/rag/`) or choose “Set up later.” Forge saves your choice
-   and creates the local folder if selected. Document search and indexing are
-   not implemented yet.
+3. **Choose local document search (RAG).** Enable a local library
+   (default storage: `.forge/rag/`) or choose “Set up later.” After setup, run
+   `forge index` or `/index` in chat to build it. No embedding service is needed.
+4. **Choose coding standards.** Accept detected languages or select Python,
+   TypeScript, JavaScript, or a comma-separated combination. Choose `generic` for
+   general guidance. Forge creates editable standards in `.forge/standards/coding.md`.
 
 Setup creates `agentic_audit/requests/default/request.md`, `.forge/config.toml`, and editable guidance in
 `.forge/standards/`. It ends with a list of created or preserved files, your
@@ -97,6 +99,47 @@ missing request or guidance templates. To change saved settings, edit
 For scripts, run `forge init --no-interactive`. Prompts are also skipped when
 input is not a terminal. This creates templates and `docs/`; set the model in
 `.forge/config.toml` before chatting.
+
+### Language-specific starter standards
+
+Select templates explicitly when creating a project configuration:
+
+```sh
+forge init --language python
+forge init --language typescript
+forge init --language javascript
+forge init --no-interactive --language python --language typescript
+forge init --no-interactive --language generic
+```
+
+Without flags, interactive setup offers detected defaults; noninteractive setup
+uses them automatically. Detection inspects up to 500 project paths, excluding
+known secrets, symlinks, audit artifacts, dependencies, and build folders. It uses
+source extensions and familiar markers such as `pyproject.toml`, `tsconfig.json`,
+and `package.json`. A package manifest without TypeScript evidence defaults to
+JavaScript. Projects with both `.ts` and `.js` files may select both. Detection is
+a starting point: override it for unusual layouts, configuration-only JavaScript,
+or larger repositories. No supported language detected means generic guidance.
+
+The selected sections are combined with general coding guidance in
+`.forge/standards/coding.md`, which the default `harness.docs` already includes in
+model context. Python guidance covers typing, exceptions, resources, dependencies,
+and tests. TypeScript covers type boundaries, narrowing, async behavior, and
+runtime validation. JavaScript covers coercion, modules, async behavior, lifecycle
+cleanup, and tests. Templates defer to existing project requirements and tooling;
+they do not install formatters or change compiler/build settings.
+
+New configurations save selections in `harness.languages`. Edit `coding.md`
+freely: repeated `forge init` preserves both configuration and existing guidance.
+If that guidance file is missing, init recreates it using the saved selections.
+Older configurations without `languages` retain generic defaults.
+
+To change an existing project's selection, edit `harness.languages` explicitly
+and update `coding.md` to suit the project. If you want a complete fresh template,
+back up and remove `coding.md`, then rerun `forge init`. Conflicting `--language`
+flags on an already-configured project report this requirement and leave its
+files untouched. Any changed project guidance requires fresh preparation for
+existing coding runs.
 
 To start, run `forge chat` and type `/request`. Forge guides you through the
 title, description, details, and results you want. Use `/ask` followed by a
@@ -131,7 +174,8 @@ stable order. Known credential paths, symlinks, build folders, and dependencies
 are excluded from folder discovery. Collection is limited to 500 documentation
 files and the configured file/context size limits. Missing documentation is
 reported in the context snapshot. Documents are sent to the selected model
-service as context; this does not build a search index.
+service as context. Use `rag.sources` for a separate searchable library instead
+of loading a large reference collection into every prompt.
 
 ## Choose a provider
 
@@ -168,6 +212,21 @@ OpenAI uses its API rather than a ChatGPT subscription or browser login. Adapter
 contracts follow the official [OpenAI Responses reference](https://developers.openai.com/api/reference/python/resources/responses/methods/create),
 [Claude Messages reference](https://platform.claude.com/docs/en/api/messages/create),
 and [Ollama chat reference](https://docs.ollama.com/api/chat).
+
+## Model personality
+
+Forge uses a shared personality across every provider: a warm, capable teammate
+with dry wit, light sarcasm, and occasional friendly teasing. The voice is defined
+in [guidance/personality.md](src/solar_forge/guidance/personality.md) and used in
+chat, discovery, planning, and coding prompts. No Ollama Modelfile or model rebuild
+is needed. For example: “You built a small bureaucracy around a boolean. We can
+simplify this.” Examples guide the tone rather than serving as repeated catchphrases.
+
+Useful answers come first. Humor becomes quieter during frustration, serious
+failures, or sensitive discussions. Ask for “no jokes” or another tone to adjust
+conversation style. Structured workflows still require valid JSON, precise tools,
+explicit approval, and real verification evidence; personality does not change
+those rules. Generated humor and adherence depend on the selected model.
 
 ## Chat with your model
 
@@ -212,7 +271,10 @@ You can complete the request workflow in this window:
 | `/select NUMBER` | Select a bundle from `/requests` |
 | `/edit-request` | Open the selected request for editing |
 | `/edit FIELD TEXT` | Update `title`, `description`, `technical_details`, or `acceptance_criteria` in a draft |
-| `/context` | Inspect included documents, exclusions, and prompt bytes; warns at 80% of the limit |
+| `/context` | Inspect included documents, retrieval, exclusions, and prompt bytes; warns at 80% of the limit |
+| `/index` | Build or refresh the local reference library |
+| `/search QUERY` | Search reference passages with source citations, without a model call |
+| `/rag` | Show library size, missing sources, and index freshness |
 | `/continue` | Open a linked conversation with a compact handoff, preserving the request, run, and draft |
 | `/request [TITLE]` | Draft a request bundle, one question at a time |
 | `/request show` | Read the current request |
@@ -256,8 +318,8 @@ Chat sends the current project documentation, the selected request and its suppo
 selected run’s questions, plan, and summary to the model when you ask for help.
 It shares the existing provider adapters, so cloud providers require the same
 API-key environment variables. Coding runs retain their own audit records and
-file diffs. Suggested tests are displayed for you to run; Forge has no shell
-command runner.
+file diffs. Approved coding runs can execute configured named verification checks
+and use their results to repair failures. Other checks are suggested for you to run.
 
 Conversations are stored under `agentic_audit/forge-chat/<run-id>/`, including
 `transcript.md`, `state.json`, context, events, and provider-call inputs/outputs.
@@ -346,13 +408,166 @@ audit artifacts under your project's version-control and retention policy.
 `state.json` is authoritative; Markdown artifacts are readable views. Events and
 saved calls retain earlier plans even when `plan.md` is replaced.
 
+## Follow work as it happens
+
+Terminal chat includes an **Activity** panel that updates while Forge is working:
+
+- Current action, such as waiting for the model, reading/writing a file, searching
+  reference documents, or running a named check.
+- Unique files changed through the coding file tool, with the two most recent
+  paths in the compact view. Use `/changes` for the complete saved diffs.
+- Latest check outcome and exit code, with a rerun reminder after later file edits.
+- Cumulative active time for the displayed chat or coding run, excluding time
+  waiting for your answers or approval.
+- Cumulative provider-reported input/output tokens for that chat or run.
+
+The panel refreshes every quarter second, including while a model call is waiting.
+Press **Ctrl+X** to request a stop. The panel acknowledges the request; verification
+processes can be terminated, while a blocking network read may finish or time out
+before control returns. **Ctrl+Q** keeps its existing behavior of waiting for the
+active action to save before closing. The panel keeps the completed activity and
+reloads saved run information when a chat is reopened. `/status` and `forge status`
+include a saved activity summary; these status commands are not live monitors.
+
+Usage is reported when the provider supplies it, usually at the end of a response.
+Unavailable counters are labelled `unavailable`; totals covering only some calls
+or fields are labelled `partial`. Failed or rejected responses count when usage was
+reported. Counts are not cost estimates or token-by-token streaming counters.
+Responses and compatible APIs use their reported input/output or prompt/completion
+fields; see [OpenAI token counting](https://developers.openai.com/api/docs/guides/token-counting)
+and the [Chat Completions reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+Claude input totals include the separately reported cache reads and writes, as
+specified in its [prompt caching documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+Ollama uses its reported prompt-evaluation and generation counts from the
+[chat response](https://docs.ollama.com/api/chat).
+
+Each run saves a compact `progress.json` alongside its existing event log, plus
+`calls/<id>-usage.json` for completed or failed calls (`null` when unavailable).
+Snapshots are best-effort display data; workflow state and action evidence remain
+separate. Older runs have no historical metrics reconstructed; if resumed, the
+panel labels earlier activity unavailable. An unfinished saved action is shown as
+“Last recorded” when reopened, not assumed to still be running. After a hard crash,
+unknown active time is not counted as time spent working. Changed-file tracking
+covers recorded file-tool changes, not arbitrary test-command side effects.
+
+## Search local documents with RAG
+
+Forge can retrieve relevant passages from a local document library for chat,
+request preparation, and coding. Indexing and keyword search run locally without
+model calls, embedding credentials, or additional dependencies. Retrieved passages
+are sent to your selected model when used as context and saved in the audit.
+
+Enable search in `.forge/config.toml`:
+
+```toml
+[rag]
+storage = "local"
+path = ".forge/rag"
+sources = ["reference", "docs/product"]
+top_k = 5
+max_result_bytes = 12000
+```
+
+Choose existing folders or individual Markdown, UTF-8 text, and reStructuredText
+files (`.md`, `.txt`, `.rst`). Paths must be inside the project. An empty `sources`
+list uses `harness.docs`, preserving compatibility with existing local RAG setup.
+Keep essential rules in `harness.docs`; put larger reference collections only in
+`rag.sources` so they are searched instead of included in full in every prompt.
+Current request attachments remain scoped to their request and are included by
+the existing context collector; other requests' audit folders are not indexed.
+
+Build and explore the library:
+
+```sh
+forge index
+forge index --status
+forge search "refund receipt requirements"
+```
+
+In chat, use `/index`, `/rag`, and `/search refund receipt requirements`. These
+commands make no model calls. Ordinary chat messages automatically retrieve
+passages for the latest message. Preparation retrieves passages for the request;
+discovery and planning receive those passages. During approved coding, the model
+can issue `search_docs` queries to pull more references. Results carry source paths,
+line ranges, document hashes, and excerpts; answers are instructed to cite them.
+Retrieved text is reference data and cannot approve edits or execute commands.
+
+Search ranks matching words using BM25-style scoring. It does not use embeddings,
+understand synonyms, or fetch websites. Specific domain terms usually work better
+than vague questions. Search returns up to `top_k` passages within the serialized
+result budget. Very small budgets can exclude an entire passage. Long source
+lines are split into bounded excerpts that retain their original line number.
+
+Run `/index` or `forge index` again after editing, adding, or removing library
+files or changing RAG settings. Search checks source hashes and refuses to return
+stale excerpts. Missing indexes and missing source paths are shown explicitly.
+Coding runs bind the retrieval settings and corpus fingerprint at preparation;
+changes require a freshly prepared run. Agent file tools cannot edit reference
+sources or the index. A corrupt cache produces an actionable error; remove its
+`index.json` and rebuild, leaving historical audit evidence intact.
+
+The first version supports up to 500 files and 5 MB of source text, within each
+file's `harness.max_file_bytes` limit. Passage text is at most 2,000 UTF-8 bytes,
+queries are capped at 2,000 bytes, and the index is capped at 20 MB. Automatic
+retrieval uses the first 2,000 bytes of the message or request as its query.
+Known secret paths, symlinks, dependencies, build folders, and audit folders are
+excluded. Credentials in otherwise ordinary documents cannot be detected reliably.
+The index contains copied document text; apply the same retention policy as your
+source documents. CLI search evidence is saved under `agentic_audit/document-retrieval/`;
+chat and coding evidence lives in the corresponding run's `retrieval/` directory.
+
+## Run verification checks
+
+Verification is disabled by default. Add trusted named commands to
+`.forge/config.toml` **before preparing a new run**:
+
+```toml
+[verification]
+commands = { tests = ["python", "-m", "unittest", "discover", "-s", "tests", "-v"] }
+env = { PYTHONPATH = "src" }
+timeout = 120
+max_output_bytes = 20000
+```
+
+Use the Python environment containing your project's dependencies, or configure
+an absolute executable path. The harness shows this policy alongside the plan;
+approving the plan permits these commands during coding. The model selects a
+name with `run_check`, without supplying arguments or shell text. Changing the
+verification policy requires a newly prepared run. Existing configurations keep
+verification disabled.
+
+Commands run in the project root with stdin closed, combined stdout/stderr,
+a timeout, and bounded captured output. Only `PATH`, `LANG`, and the explicitly
+configured environment are passed; provider credentials are not inherited.
+Do not put secrets in `verification.env`: the policy is saved in the audit.
+Timeouts and cancellation kill the process group. This runner currently requires
+POSIX. Ctrl+X can stop a running check as well as coding between actions.
+
+**Configure only trusted checks.** Test commands execute project code—including
+code edited by the agent—with your local permissions. They can access the
+network and files outside the project, change files, or start detached processes.
+Fixed arguments and process-group cleanup are not an OS sandbox. Command side
+effects are not captured by the file-write journal or automatically rolled back.
+
+Each check saves its command, exit status, duration, bounded output, and outcome
+under the run's `verification/<turn>/`. Failed checks return evidence to the agent
+for repair. Completed results are reused after interruption; a saved execution
+intent without a result becomes an unknown interrupted outcome, never an
+automatic replay. After a harness crash, inspect any surviving process before
+requesting another check.
+
+The final summary lists recorded outcomes and flags checks preceding later agent
+file edits as needing a rerun. External edits and command side effects are not
+tracked by this staleness flag. Passing commands do not certify every acceptance
+criterion or automatically accept the changes.
+
 ## Boundaries of this baseline
 
 This is a single-agent workflow, ready to extend behind provider and tool
-interfaces. It edits project files but does not execute shell commands, tests,
-Git operations, or deployments. A finished run has state `review_required` and
-marks acceptance criteria as unverified. Run suggested checks yourself before
-accepting changes.
+interfaces. It edits project files and can execute opt-in named verification
+commands on POSIX systems. It has no arbitrary shell, Git, or deployment tool. A
+finished run has state `review_required`: recorded command outcomes are evidence,
+while acceptance criteria still require human review.
 
 Traversal, symlinks, known credential paths, and writes to request/context,
 policy, Git, and audit files are blocked. File size, initial documentation size,
@@ -366,7 +581,7 @@ sent to the selected provider and stored in the audit trail. Credentials in
 arbitrarily named files cannot be detected reliably: curate documentation and
 review your audit retention policy. API keys are not written by the adapter.
 
-Streaming, cost accounting, retrieval, OS-isolated verification, Git/deployment
+Streaming, cost accounting, semantic retrieval, OS-isolated verification, Git/deployment
 actions, and optional multi-agent coordination are follow-up work. See the
 [implementation plan](agentic_audit/requests/baseline/implementation-plan.md) and
 [architecture](docs/architecture.md).

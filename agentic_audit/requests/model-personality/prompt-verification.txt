@@ -1,0 +1,3 @@
+Shared personality verified in chat, discovery, planning, and coding provider input audits.
+Structured JSON instruction and review-required completion retained.
+Scripted providers verify prompt wiring, not live-model humor or compliance.

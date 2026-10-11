@@ -1,0 +1,6 @@
+Wheel resource verification
+/tmp/solar-forge-language-wheel/solar_forge_harness-0.1.0-py3-none-any.whl
+Imported package from wheel: /tmp/solar-forge-language-wheel/solar_forge_harness-0.1.0-py3-none-any.whl/solar_forge/__init__.py
+python: loaded and composed successfully
+typescript: loaded and composed successfully
+javascript: loaded and composed successfully

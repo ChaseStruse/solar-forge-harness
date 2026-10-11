@@ -89,8 +89,14 @@ class Audit:
         path = self.path / "events.jsonl"
         if path.is_symlink():
             raise ForgeError("Audit event file is a symlink.")
+        event = {"at": now(), "type": kind, **details}
         with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"at": now(), "type": kind, **details}, ensure_ascii=False) + "\n")
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        from .progress import update_progress
+        try:
+            update_progress(self, event)
+        except (OSError, ValueError, KeyError, TypeError):
+            pass  # Progress is a best-effort view; the event log remains authoritative evidence.
 
     @contextmanager
     def lock(self):

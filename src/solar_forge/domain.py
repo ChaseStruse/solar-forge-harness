@@ -1,5 +1,5 @@
 """Provider-independent request and configuration models."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 import re
 import tomllib
@@ -7,6 +7,9 @@ import tomllib
 
 class ForgeError(Exception):
     """An actionable error safe to display in the CLI."""
+
+
+SUPPORTED_LANGUAGES = ("python", "typescript", "javascript")
 
 
 REQUEST_TEMPLATE = """# Request: Your request title
@@ -30,6 +33,8 @@ model = "CHANGE_ME"
 timeout = 120
 
 [harness]
+# Starter coding standards selected by init; edit generated coding.md freely.
+languages = [] # python, typescript, javascript; empty means generic
 max_turns = 30
 max_file_bytes = 100000
 max_context_bytes = 200000
@@ -37,10 +42,20 @@ max_prompt_bytes = 500000
 # Add relevant domain documentation here; all paths are project-relative.
 docs = ["README.md", "AGENTS.md", ".forge/standards/coding.md", ".forge/standards/architecture.md", ".forge/standards/deployment.md", ".forge/standards/git.md", ".forge/standards/testing.md"]
 
-# Reserved for future document search; no index is built yet.
+# Optional trusted checks, executed only during approved coding runs.
+# [verification]
+# commands = { tests = ["python", "-m", "unittest", "discover", "-s", "tests", "-v"] }
+# env = { PYTHONPATH = "src" }
+# timeout = 120
+# max_output_bytes = 20000
+
+# Local passage search. Run forge index after enabling or changing sources.
 [rag]
 storage = "deferred" # deferred | local
-path = ""
+path = "" # e.g. ".forge/rag" for local storage
+sources = [] # Empty uses harness.docs; separate reference folders avoid full prompt inclusion.
+top_k = 5
+max_result_bytes = 12000
 '''
 
 
@@ -82,6 +97,51 @@ class Request:
 class RagConfig:
     storage: str = "deferred"
     path: str = ""
+    sources: list[str] = field(default_factory=list)
+    top_k: int = 5
+    max_result_bytes: int = 12000
+
+    def snapshot(self) -> dict:
+        if self.storage not in ('deferred', 'local'):
+            raise ForgeError('rag.storage must be deferred or local.')
+        if not isinstance(self.path, str):
+            raise ForgeError('rag.path must be a string.')
+        if self.storage == 'local' and (not self.path or Path(self.path).is_absolute()
+                or '..' in Path(self.path).parts or Path(self.path) == Path('.')):
+            raise ForgeError('rag.path must be a folder inside the project for local storage.')
+        if not isinstance(self.sources, list) or any(not isinstance(p, str) or not p.strip() for p in self.sources):
+            raise ForgeError('rag.sources must be a list of project-relative paths.')
+        if type(self.top_k) is not int or not 1 <= self.top_k <= 20:
+            raise ForgeError('rag.top_k must be an integer from 1 to 20.')
+        if type(self.max_result_bytes) is not int or not 512 <= self.max_result_bytes <= 100000:
+            raise ForgeError('rag.max_result_bytes must be an integer from 512 to 100000.')
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class VerificationConfig:
+    commands: dict[str, list[str]] = field(default_factory=dict)
+    env: dict[str, str] = field(default_factory=dict)
+    timeout: int = 120
+    max_output_bytes: int = 20000
+
+    def snapshot(self) -> dict:
+        if not isinstance(self.commands, dict) or any(
+            not isinstance(name, str) or not re.fullmatch(r'[a-zA-Z0-9_-]+', name)
+            or not isinstance(argv, list) or not argv
+            or any(not isinstance(arg, str) or '\0' in arg for arg in argv)
+            or not argv[0].strip() for name, argv in self.commands.items()
+        ):
+            raise ForgeError('verification.commands must map names to nonempty argv arrays.')
+        if not isinstance(self.env, dict) or any(
+            not isinstance(key, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key)
+            or not isinstance(value, str) or '\0' in value for key, value in self.env.items()
+        ):
+            raise ForgeError('verification.env must map environment names to strings.')
+        for name in ('timeout', 'max_output_bytes'):
+            if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
+                raise ForgeError(f'verification.{name} must be a positive integer.')
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -96,14 +156,17 @@ class Config:
     max_context_bytes: int = 200000
     max_prompt_bytes: int = 500000
     docs: list[str] = field(default_factory=lambda: ["README.md", "AGENTS.md"])
+    languages: list[str] = field(default_factory=list)
     rag: RagConfig = field(default_factory=RagConfig)
+    verification: VerificationConfig = field(default_factory=VerificationConfig)
 
     @classmethod
     def load(cls, path: Path) -> "Config":
         try:
             data = tomllib.loads(path.read_text())
             provider, harness = data.get("provider", {}), data.get("harness", {})
-            config = cls(**provider, **harness, rag=RagConfig(**data.get("rag", {})))
+            config = cls(**provider, **harness, rag=RagConfig(**data.get("rag", {})),
+                         verification=VerificationConfig(**data.get("verification", {})))
         except (OSError, TypeError, AttributeError, tomllib.TOMLDecodeError) as exc:
             raise ForgeError(f"Invalid .forge/config.toml: {exc}") from exc
         for name in ("timeout", "max_turns", "max_file_bytes", "max_context_bytes", "max_prompt_bytes"):
@@ -116,12 +179,10 @@ class Config:
             raise ForgeError("Provider must be openai, anthropic, ollama, or compatible.")
         if not isinstance(config.docs, list) or not all(isinstance(p, str) for p in config.docs):
             raise ForgeError("harness.docs must be a list of project-relative paths.")
-        if not isinstance(config.rag.storage, str) or config.rag.storage not in {"deferred", "local"}:
-            raise ForgeError("rag.storage must be deferred or local.")
-        if not isinstance(config.rag.path, str):
-            raise ForgeError("rag.path must be a string.")
-        if config.rag.storage == "local" and (not config.rag.path or Path(config.rag.path).is_absolute()
-                                             or ".." in Path(config.rag.path).parts
-                                             or Path(config.rag.path) == Path(".")):
-            raise ForgeError("rag.path must be a folder inside the project for local storage.")
+        if (not isinstance(config.languages, list)
+                or any(not isinstance(name, str) or name not in SUPPORTED_LANGUAGES for name in config.languages)
+                or len(set(config.languages)) != len(config.languages)):
+            raise ForgeError('harness.languages must be a list of unique supported names: python, typescript, javascript.')
+        config.rag.snapshot()
+        config.verification.snapshot()
         return config

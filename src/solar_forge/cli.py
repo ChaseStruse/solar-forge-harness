@@ -8,12 +8,14 @@ from . import __version__
 from .agent import approve, run
 from .audit import Audit
 from .chat import ChatService
-from .domain import Config, ForgeError, REQUEST_TEMPLATE
+from .domain import Config, ForgeError, REQUEST_TEMPLATE, SUPPORTED_LANGUAGES
 from .providers import HTTPProvider, assert_identity, configured_identity
 from .requests import current_request, request_name, request_path
 from .setup import create, initialize
 from .workflow import discover, plan, prepare, record_answer
 from .workspace import Workspace
+from .progress import read_progress, format_progress
+from .retrieval import build_index, index_status, search, format_result, record_standalone
 
 
 def parser() -> argparse.ArgumentParser:
@@ -23,9 +25,15 @@ def parser() -> argparse.ArgumentParser:
     commands = cli.add_subparsers(dest='command', required=True)
     init = commands.add_parser('init', help='Set up your model, documents, and project guidance')
     init.add_argument('--no-interactive', action='store_true', help='Create setup templates without prompts')
+    init.add_argument('--language', action='append', choices=[*SUPPORTED_LANGUAGES, 'generic'],
+                      help='Starter coding standards; repeat for mixed projects (default: detect languages)')
     request = commands.add_parser('request', help='Create a request template')
     request.add_argument('title')
     request.add_argument('--output', help='Must be agentic_audit/requests/<request-name>/request.md')
+    index = commands.add_parser('index', help='Build or inspect the local document library')
+    index.add_argument('--status', action='store_true', help='Inspect freshness without rebuilding')
+    lookup = commands.add_parser('search', help='Search local reference passages without a model call')
+    lookup.add_argument('query', help='Quoted search query')
     chat = commands.add_parser('chat', help='Open a terminal chat interface with the configured model')
     chat.add_argument('--provider', choices=['openai', 'anthropic', 'ollama', 'compatible'])
     chat.add_argument('--model')
@@ -73,6 +81,7 @@ def show(audit: Audit, workspace: Workspace) -> None:
     pending = sum(not q.get('answer') for q in state['questions'])
     print(f"{audit.path.relative_to(workspace.root)}\n  {state['title']}: {state['status']}; "
           f"{pending} pending questions; {state['turns']} turns")
+    print(format_progress(read_progress(audit), width=160))
 
 
 def main(argv=None) -> int:
@@ -82,7 +91,7 @@ def main(argv=None) -> int:
         if not workspace.root.is_dir():
             raise ForgeError('Project root must be an existing directory.')
         if args.command == 'init':
-            initialize(workspace, interactive=not args.no_interactive and sys.stdin.isatty())
+            initialize(workspace, interactive=not args.no_interactive and sys.stdin.isatty(), languages=args.language)
             return 0
         if args.command == 'request':
             if '\n' in args.title or '\r' in args.title or not args.title.strip():
@@ -114,6 +123,14 @@ def main(argv=None) -> int:
                     answer_interactively(audit)
             return 0
         config = Config.load(workspace.path('.forge/config.toml'))
+        workspace.max_file_bytes = config.max_file_bytes
+        if args.command in {'index', 'search'}:
+            result = (search(workspace, config, args.query) if args.command == 'search' else
+                      index_status(workspace, config) if args.status else build_index(workspace, config))
+            evidence = record_standalone(workspace, result)
+            print(format_result(result))
+            print(f'Evidence: {evidence}')
+            return 0 if result['status'] == 'ready' else 1
         # Changing provider implies its default endpoint/key; explicit config still
         # applies when only the model changes.
         if args.provider and args.provider != config.kind:
@@ -148,7 +165,7 @@ def main(argv=None) -> int:
                     if not args.approve:
                         if not sys.stdin.isatty():
                             raise ForgeError('Review plan.md and pass --approve, or run in an interactive terminal.')
-                        if input('Approve this plan and permit project file edits? [y/N] ').strip().lower() not in {'y', 'yes'}:
+                        if input('Approve this plan and permit project file edits and configured verification commands? [y/N] ').strip().lower() not in {'y', 'yes'}:
                             print('Plan remains unapproved.')
                             return 0
                     approve(audit)
