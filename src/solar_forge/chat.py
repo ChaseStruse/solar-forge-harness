@@ -1,5 +1,6 @@
 """Audited, provider-independent conversation service."""
 import json
+import uuid
 
 from .requests import current_request, request_path, read_request
 from .audit import Audit, now
@@ -177,8 +178,8 @@ class ChatService:
                     record_search(audit, context['retrieval'])
                 response = call(audit, self.provider, system, messages, self.config.max_prompt_bytes,
                                 on_chunk=on_chunk, cancelled=cancelled)
-            except Exception:
-                audit.event('chat_reply_failed')
+            except Exception as exc:
+                audit.event('chat_reply_failed', error=str(exc) if isinstance(exc, ForgeError) else 'Unexpected failure')
                 raise
             state['messages'] = [*messages, {'role': 'assistant', 'content': response}]
             state['pending_message'] = None
@@ -207,6 +208,8 @@ class ChatService:
 
     def command(self, session: str, message: str, *, cancelled=None) -> dict:
         """User-entered actions only; provider replies never pass through this path."""
+        if message.strip().lower() == '/logs':
+            return self.logs(session)
         if message.strip() == '/continue':
             return self.continue_chat(session)
         if message.strip() == '/discard-pending':
@@ -250,6 +253,52 @@ class ChatService:
             if not error:
                 audit.event('chat_command_finished')
         return self.get(session) | {'command_error': error}
+
+    def logs(self, session: str) -> dict:
+        """Export diagnostics without calling the model, even after a failed reply."""
+        audit = self._open(session)
+        with audit.lock():
+            state = audit.load()
+            lines = ['# Solar Forge session logs', '', f'Chat: {session}',
+                     f'Exported: {now()}', f'Configured timeout: {self.config.timeout} seconds',
+                     '', 'Contains conversation text and diagnostics; review before sharing.', '']
+            self._transcript(audit, state)
+            sources = [audit]
+            # Include every run selected during this chat, not other chat sessions.
+            runs = {state['workflow_run']} if state.get('workflow_run') else set()
+            runs.update(state.get('session_runs', []))
+            for relative in sorted(runs - {session}):
+                try:
+                    source = Audit.open(self.workspace, relative)
+                    if source.load().get('run_kind') != 'chat':
+                        sources.append(source)
+                except (ForgeError, OSError):
+                    lines.append(f'Unavailable run: {relative}')
+            for source in sources:
+                lines.extend(['## ' + source.path.relative_to(self.workspace.root).as_posix(), ''])
+                saved = source.load()
+                lines.append(json.dumps({key: saved.get(key) for key in
+                                         ('status', 'provider', 'model', 'endpoint')}, indent=2))
+                for name in ('transcript.md', 'events.jsonl', 'progress.json'):
+                    if (source.path / name).is_file():
+                        lines.extend(['', '### ' + name, '', source.read(name)])
+                for path in sorted((source.path / 'calls').glob('*')):
+                    if path.is_file() and path.name.endswith(('-usage.json', '-output.txt', '-partial.txt')):
+                        lines.extend(['', '### calls/' + path.name, '', source.read('calls/' + path.name)])
+            name = 'session-logs-' + uuid.uuid4().hex[:10] + '.md'
+            audit.write(name, '\n'.join(lines) + '\n')
+            relative = (audit.path / name).relative_to(self.workspace.root).as_posix()
+            result = 'Session logs exported to ' + relative + '\n\n' + '\n'.join(lines)
+            state['messages'].extend([{'role': 'user', 'content': '/logs'},
+                                      {'role': 'assistant', 'content': 'Forge workflow\nSession logs exported to ' + relative}])
+            state['updated_at'] = now()
+            audit.save(state)
+            self._transcript(audit, state)
+            audit.event('chat_logs_exported', path=relative)
+        data = self.get(session) | {'command_error': None, 'logs_path': relative}
+        # Display the diagnostics, while keeping repeated exports out of saved history.
+        data['messages'] = [*data['messages'][:-1], {'role': 'assistant', 'content': 'Forge workflow\n' + result}]
+        return data
 
     @staticmethod
     def _transcript(audit: Audit, state: dict) -> None:

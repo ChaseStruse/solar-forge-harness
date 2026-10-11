@@ -21,6 +21,7 @@ HELP = '''Work on a request here in chat:
   /select NUMBER     Select a request from /requests
   /edit-request      Open the selected request for editing
   /edit FIELD TEXT   Edit title, description, technical_details, or acceptance_criteria
+  /logs              Export current chat and linked run diagnostics
   /context           Inspect included context and prompt budget
   /index             Build or refresh the local document library
   /search QUERY      Find reference passages with source citations
@@ -118,6 +119,8 @@ class ChatWorkflow:
                 self.state.pop('reviewed_plan', None)
                 self.state.pop('answering', None)
             self.state['workflow_run'] = relative
+            if relative not in self.state.setdefault('session_runs', []):
+                self.state['session_runs'].append(relative)
             self.state['request_path'] = audit.load()['request_path']
             return audit
         if not self.state.get('workflow_run'):
@@ -333,6 +336,7 @@ class ChatWorkflow:
         def created(audit):
             self.state['request_path'] = audit.load()['request_path']
             self.state['workflow_run'] = audit.path.relative_to(self.workspace.root).as_posix()
+            self.state.setdefault('session_runs', []).append(self.state['workflow_run'])
             self.state.pop('reviewed_plan', None)
             self.state.pop('answering', None)
             # Keep the run discoverable in this chat even if the provider call fails.

@@ -243,7 +243,7 @@ class TerminalChat:
             self.notice = 'No pending message to retry.'
             self.app.invalidate()
             return
-        if not retry and self.current and self.current['pending_message'] and message != '/discard-pending':
+        if not retry and self.current and self.current['pending_message'] and message not in {'/discard-pending', '/logs'}:
             self.notice = 'Retry with Ctrl+R, or use /discard-pending to edit the saved message.'
             self.app.invalidate()
             return

@@ -133,3 +133,24 @@ class ChatFeatureTests(unittest.TestCase):
         self.assertFalse((self.ws.root / 'app.py').exists())
         self.assertEqual(audit.load()['pending_action']['path'], 'app.py')
         self.assertEqual(audit.load()['status'], 'interrupted')
+
+    def test_logs_export_failed_chat_and_linked_run_without_model_call(self):
+        from solar_forge.domain import Request
+        chat = Audit.open(self.ws, self.session)
+        run = Audit.create(self.ws, Request.parse(REQUEST))
+        run.event('provider_call_failed', call_id='failed')
+        unrelated = self.service.new()['id']
+        state = chat.load()
+        state.update(pending_message='Failed question', workflow_run=run.path.relative_to(self.ws.root).as_posix())
+        state['messages'].append({'role': 'user', 'content': unrelated})
+        chat.save(state)
+        result = self.command('/logs')
+        exported = (self.ws.root / result['logs_path']).read_text()
+        self.assertIn('provider_call_failed', exported)
+        self.assertIn('Configured timeout: 120 seconds', exported)
+        self.assertNotIn('## ' + unrelated, exported)
+        self.assertEqual(result['pending_message'], 'Failed question')
+        self.assertEqual(self.service.provider.calls, [])
+        again = self.command('/logs')
+        self.assertNotEqual(result['logs_path'], again['logs_path'])
+        self.assertTrue((self.ws.root / result['logs_path']).exists())
