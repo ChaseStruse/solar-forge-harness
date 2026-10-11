@@ -6,6 +6,8 @@ from threading import Event
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.document import Document
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.filters import Condition, has_focus
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.key_binding.bindings.focus import focus_next, focus_previous
@@ -15,6 +17,7 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, Label, TextArea
 
 from .chat import ChatService
+from .chat_workflow import HELP
 from .domain import ForgeError
 from .progress import with_progress, format_progress
 
@@ -26,6 +29,27 @@ def display(text: str) -> str:
     """Keep provider text as text, never as terminal control sequences."""
     text = ANSI.sub('', text)
     return ''.join(char for char in text if char in '\n\t' or (char.isprintable() and char != '\x7f'))
+
+
+class SlashCompleter(Completer):
+    commands = list(dict.fromkeys(['/request', *re.findall(r'^  (/[^ ]+)', HELP, re.M)]))
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        if not text.startswith('/') or any(char.isspace() for char in text):
+            return
+        for command in self.commands:
+            if command.startswith(text) and command != text:
+                yield Completion(command, start_position=-len(text))
+
+
+class ConversationLexer(Lexer):
+    def __init__(self, ui):
+        self.ui = ui
+
+    def lex_document(self, document):
+        styles = list(self.ui.conversation_styles)
+        return lambda row: [(styles[row] if row < len(styles) else 'class:assistant', document.lines[row])]
 
 
 class TerminalChat:
@@ -42,12 +66,14 @@ class TerminalChat:
         self.request_choices = None
         self.request_choice_index = 0
         self.request_command = ''
+        self.live_events = []
+        self.conversation_styles = []
         self.notice = 'Enter sends. Alt+Enter adds a line. /help lists actions.'
         self.history = TextArea(read_only=True, scrollbar=True, wrap_lines=False, width=Dimension.exact(28),
                                 style='class:history')
-        self.conversation = TextArea(read_only=True, scrollbar=True, wrap_lines=True, style='class:conversation')
+        self.conversation = TextArea(read_only=True, scrollbar=True, wrap_lines=True, style='class:conversation', lexer=ConversationLexer(self))
         self.composer = TextArea(multiline=True, height=Dimension(min=3, max=6, preferred=3),
-                                 wrap_lines=True, read_only=Condition(lambda: self.busy or self.request_choices is not None), style='class:composer')
+                                 wrap_lines=True, completer=SlashCompleter(), complete_while_typing=True, read_only=Condition(lambda: self.busy or self.request_choices is not None), style='class:composer')
         self.request_picker = TextArea(read_only=True, scrollbar=True, wrap_lines=False,
                                        height=Dimension(min=3, max=8), style='class:composer')
         keys = self._keys()
@@ -60,7 +86,7 @@ class TerminalChat:
                                           'Start: /request or /prepare. Continue: /runs. Help: /help.'),
                           style='class:workflow'),
                     ConditionalContainer(
-                        Frame(Label(lambda: self.activity_text(), style='class:activity'), title='Activity'),
+                        Frame(Label(lambda: self.activity_text() + ('\n\n' + '\n'.join(self.live_events[-6:]) if self.live_events else ''), style='class:activity'), title='Activity'),
                         filter=Condition(lambda: self.activity is not None or self.busy)),
                     ConditionalContainer(Frame(self.request_picker, title='Choose a request · ↑/↓ select · Enter confirm · Esc cancel'),
                                          filter=Condition(lambda: self.request_choices is not None)),
@@ -84,7 +110,8 @@ class TerminalChat:
                                    'footer': 'bg:#252e22 #c4e29c', 'status': '#aebb9f', 'workflow': '#c4e29c',
                                    'activity': 'bg:#20261f #c4e29c',
                                    'history': 'bg:#111412 #919b91', 'conversation': 'bg:#161817 #e7ebe6',
-                                   'composer': 'bg:#20261f #e7ebe6', 'frame.border': '#637951',
+                                   'user': '#83cfff', 'assistant': '#e7ebe6', 'workflow-text': '#c4e29c',
+                                   'composer': 'bg:#20261f #83cfff', 'frame.border': '#637951',
                                    'frame.label': '#c4e29c bold'}))
         self.refresh_history()
         if resume:
@@ -118,7 +145,10 @@ class TerminalChat:
         @keys.add('enter', filter=has_focus(self.composer) & idle, eager=True)
         def send(event):
             if not self.busy:
-                event.app.create_background_task(self.send())
+                if self.composer.buffer.complete_state:
+                    self.accept_completion()
+                else:
+                    event.app.create_background_task(self.send())
 
         @keys.add('escape', 'enter', filter=has_focus(self.composer) & idle)
         @keys.add('c-j', filter=has_focus(self.composer) & idle)
@@ -153,7 +183,11 @@ class TerminalChat:
                 else:
                     self.app.layout.focus(self.history)
 
-        @keys.add('tab', filter=~picking)
+        @keys.add('tab', filter=has_focus(self.composer) & idle & Condition(lambda: self.composer.buffer.complete_state is not None), eager=True)
+        def complete_command(event):
+            self.accept_completion()
+
+        @keys.add('tab', filter=~picking & Condition(lambda: self.composer.buffer.complete_state is None))
         def next_pane(event):
             focus_next(event)
 
@@ -180,6 +214,12 @@ class TerminalChat:
                 event.app.exit()
         return keys
 
+    def accept_completion(self):
+        state = self.composer.buffer.complete_state
+        if state:
+            completion = state.current_completion or state.completions[0]
+            self.composer.buffer.apply_completion(completion)
+
     def refresh_history(self) -> None:
         self.sessions = self.service.list()
         self.history.text = '\n'.join(('› ' if self.current and s['id'] == self.current['id'] else '  ') +
@@ -191,6 +231,7 @@ class TerminalChat:
         self.close_request_picker()
         try:
             self.current = self.service.get(session)
+            self.live_events = []
             self.activity = self.current.get('run_progress') or self.current.get('progress')
             self.composer.text = ''
             self.notice = ('Reply pending. Ctrl+R retries; /discard-pending lets you edit it.' if self.current['pending_message']
@@ -206,6 +247,7 @@ class TerminalChat:
             return
         self.close_request_picker()
         self.current = None
+        self.live_events = []
         self.activity = None
         self.activity_generation += 1
         self.composer.text = ''
@@ -302,6 +344,18 @@ class TerminalChat:
                 text += '\n\nYou (reply pending)\n' + display(self.current['pending_message'])
         if self.partial_reply:
             text += '\n\nForge (streaming; not yet complete)\n' + display(self.partial_reply)
+        styles = []
+        if self.current:
+            for index, message in enumerate(self.current['messages']):
+                if index:
+                    styles.append('class:assistant')
+                role = ('class:user' if message['role'] == 'user' else
+                        'class:workflow-text' if message['content'].startswith('Forge workflow') else 'class:assistant')
+                block = ('You' if message['role'] == 'user' else 'Forge') + '\n' + display(message['content'])
+                styles.extend([role] * len(block.split('\n')))
+            if self.current['pending_message']:
+                styles.extend(['class:user'] * (2 + len(display(self.current['pending_message']).split('\n'))))
+        self.conversation_styles = styles
         self.conversation.text = text
         self.conversation.buffer.cursor_position = len(text) if self.current else 0
         self.app.invalidate()
@@ -361,10 +415,14 @@ class TerminalChat:
         self.activity_generation += 1
         generation = self.activity_generation
         self.activity = None
+        self.live_events = []
         loop = asyncio.get_running_loop()
         def update_activity(snapshot):
             if self.busy and generation == self.activity_generation:
                 self.activity = snapshot
+                entry = display(snapshot.get('updated_at', '')[11:19] + ' · ' + snapshot.get('action', 'Working'))
+                if not self.live_events or self.live_events[-1] != entry:
+                    self.live_events.append(entry)
                 self.app.invalidate()
         def on_progress(snapshot):
             loop.call_soon_threadsafe(update_activity, snapshot)
@@ -382,6 +440,8 @@ class TerminalChat:
                 self.current['pending_message'] = question if asking else message
             if not retry:
                 self.composer.buffer.set_document(Document(''), bypass_readonly=True)
+            if command:
+                self.current = dict(self.current, messages=[*self.current['messages'], {'role': 'user', 'content': message}])
             self.render()
             if command:
                 self.current = await asyncio.to_thread(with_progress, on_progress, self.service.command, self.current['id'], message,

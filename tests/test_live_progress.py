@@ -135,3 +135,31 @@ class LiveProgressTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('(partial)', ui.activity_text())
             self.assertEqual(ui.activity['usage']['calls'], 2)
             self.assertEqual(ui.activity['usage']['input_tokens'], 3)
+
+    async def test_discovery_command_and_activity_are_visible_before_completion(self):
+        started, release = Event(), Event()
+        class SlowProvider:
+            def complete(self, system, messages):
+                started.set()
+                if not release.wait(3):
+                    raise RuntimeError('Test timed out')
+                return json.dumps({'questions': []})
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            ws = Workspace(Path(tmp))
+            write_request(ws, DEFAULT_REQUEST, REQUEST)
+            service = ChatService(ws, Config(model='test'), TextProvider(RuntimeError('Offline')))
+            ui = TerminalChat(service, input=pipe, output=WideOutput())
+            ui.composer.text = '/prepare'
+            await ui.send()
+            service.provider = SlowProvider()
+            ui.composer.text = '/discover'
+            task = asyncio.create_task(ui.send())
+            try:
+                await self.wait_until(lambda: started.is_set() and any('Waiting for model' in line for line in ui.live_events))
+                self.assertTrue(ui.busy)
+                self.assertIn('/discover', ui.conversation.text)
+                self.assertTrue(any('Running /discover' in line for line in ui.live_events))
+            finally:
+                release.set()
+                await asyncio.wait_for(task, 3)
+            self.assertTrue(any('Command finished' in line for line in ui.live_events))

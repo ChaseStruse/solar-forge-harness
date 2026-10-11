@@ -363,3 +363,26 @@ class TerminalBoundaryTests(unittest.TestCase):
         with patch('solar_forge.terminal_chat.sys.stdin.isatty', return_value=False):
             with self.assertRaisesRegex(ForgeError, 'interactive terminal'):
                 run_terminal_chat(None)
+
+
+class ChatPresentationTests(unittest.TestCase):
+    def test_slash_suggestions_prioritize_request_and_stop_after_arguments(self):
+        from prompt_toolkit.document import Document
+        from solar_forge.terminal_chat import SlashCompleter
+        completer = SlashCompleter()
+        options = list(completer.get_completions(Document('/r'), None))
+        self.assertEqual(options[0].text, '/request')
+        self.assertIn('/run', [item.text for item in options])
+        self.assertEqual(list(completer.get_completions(Document('/request title'), None)), [])
+        self.assertNotIn('/request', [item.text for item in completer.get_completions(Document('/request'), None)])
+
+    def test_user_and_model_lines_receive_different_styles(self):
+        with tempfile.TemporaryDirectory() as tmp, create_pipe_input() as pipe:
+            service = ChatService(Workspace(Path(tmp)), Config(model='test'), TextProvider())
+            ui = TerminalChat(service, input=pipe, output=DummyOutput())
+            ui.current = service.new()
+            ui.current['messages'] = [{'role': 'user', 'content': 'Question\nmore'}, {'role': 'assistant', 'content': 'Answer'}]
+            ui.render()
+            tokens = ui.conversation.control.lexer.lex_document(ui.conversation.document)
+            self.assertEqual(tokens(1)[0][0], 'class:user')
+            self.assertEqual(tokens(5)[0][0], 'class:assistant')

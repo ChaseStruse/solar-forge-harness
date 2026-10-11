@@ -185,3 +185,13 @@ class SetupTests(unittest.TestCase):
             code, _, err, _ = self.invoke(root, (), '--no-interactive')
             self.assertEqual(code, 0, err)
             self.assertTrue(logs.is_dir())
+
+    def test_interactive_choice_uses_scrollable_menu(self):
+        from solar_forge.setup import choice
+        with patch('solar_forge.setup.sys.stdin.isatty', return_value=True), patch('solar_forge.setup.sys.stdout.isatty', return_value=True), patch('prompt_toolkit.shortcuts.radiolist_dialog') as dialog:
+            dialog.return_value.run.return_value = '2'
+            self.assertEqual(choice('Service', ('1', '2'), '1', ['Local', 'Hosted']), '2')
+            self.assertEqual(dialog.call_args.kwargs['values'], [('1', 'Local'), ('2', 'Hosted')])
+            dialog.return_value.run.return_value = None
+            with self.assertRaises(KeyboardInterrupt):
+                choice('Service', ('1', '2'), '1')
