@@ -15,6 +15,7 @@ The UI, workflow rules, transport, and file operations have separate modules.
 | `providers.py` | Normalize HTTP transports behind `Provider.complete` |
 | `workflow.py` | Discovery, questions, answers, planning, context consistency |
 | `agent.py` | Approved execution, action validation, write journal and recovery |
+| `verification.py` | Named trusted command execution, process limits, evidence and recovery |
 | `workspace.py` | Project path boundaries, size checks, inventory, atomic writes |
 | `audit.py` | Run directories, checkpoints, events, artifacts, per-run locks |
 | `chat.py` | Conversation and explicit workflow actions, pending-turn retry, transcripts, session history |
@@ -128,6 +129,29 @@ Events, questions, and state are separate filesystem writes, not a transaction
 or cryptographically chained log. State is the recovery authority; event records
 may repeat around interrupted actions. The audit is reviewable project evidence,
 not a tamper-proof compliance ledger. Exact byte snapshots preserve UTF-8 CRLF.
+
+## Verification execution
+
+Preparation snapshots the validated verification policy into run state. Planning
+appends the exact command configuration to the reviewable plan, whose hash is
+approved before execution. Policy changes invalidate the run. Legacy runs without
+a policy can continue only with verification disabled.
+
+The agent's `run_check` action accepts only a configured name. The POSIX runner
+uses fixed argv with no shell, a minimal environment, project cwd, closed stdin,
+bounded output capture, and process-group termination on timeout or cancellation.
+The model receives the result as tool feedback and can repair code and rerun.
+Checks execute trusted project code with local user permissions; this is not
+filesystem/network isolation. Detached descendants and a hard harness crash can
+outlive normal process-group cleanup. Command side effects are not journaled.
+
+An intent is persisted before spawn and a result before advancing the agent's
+checkpoint. Resuming a completed check reuses its result. An intent with no result
+is reported as interrupted with unknown outcome and is never automatically
+replayed. Checks clear cached file reads because they may modify the workspace.
+Summaries distinguish actual outcomes from model notes and flag results predating
+later agent writes; external edits and check side effects are not tracked by this
+flag. Acceptance criteria still need human review.
 
 ## Next extension points
 

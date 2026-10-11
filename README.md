@@ -256,8 +256,8 @@ Chat sends the current project documentation, the selected request and its suppo
 selected run’s questions, plan, and summary to the model when you ask for help.
 It shares the existing provider adapters, so cloud providers require the same
 API-key environment variables. Coding runs retain their own audit records and
-file diffs. Suggested tests are displayed for you to run; Forge has no shell
-command runner.
+file diffs. Approved coding runs can execute configured named verification checks
+and use their results to repair failures. Other checks are suggested for you to run.
 
 Conversations are stored under `agentic_audit/forge-chat/<run-id>/`, including
 `transcript.md`, `state.json`, context, events, and provider-call inputs/outputs.
@@ -346,13 +346,58 @@ audit artifacts under your project's version-control and retention policy.
 `state.json` is authoritative; Markdown artifacts are readable views. Events and
 saved calls retain earlier plans even when `plan.md` is replaced.
 
+## Run verification checks
+
+Verification is disabled by default. Add trusted named commands to
+`.forge/config.toml` **before preparing a new run**:
+
+```toml
+[verification]
+commands = { tests = ["python", "-m", "unittest", "discover", "-s", "tests", "-v"] }
+env = { PYTHONPATH = "src" }
+timeout = 120
+max_output_bytes = 20000
+```
+
+Use the Python environment containing your project's dependencies, or configure
+an absolute executable path. The harness shows this policy alongside the plan;
+approving the plan permits these commands during coding. The model selects a
+name with `run_check`, without supplying arguments or shell text. Changing the
+verification policy requires a newly prepared run. Existing configurations keep
+verification disabled.
+
+Commands run in the project root with stdin closed, combined stdout/stderr,
+a timeout, and bounded captured output. Only `PATH`, `LANG`, and the explicitly
+configured environment are passed; provider credentials are not inherited.
+Do not put secrets in `verification.env`: the policy is saved in the audit.
+Timeouts and cancellation kill the process group. This runner currently requires
+POSIX. Ctrl+X can stop a running check as well as coding between actions.
+
+**Configure only trusted checks.** Test commands execute project code—including
+code edited by the agent—with your local permissions. They can access the
+network and files outside the project, change files, or start detached processes.
+Fixed arguments and process-group cleanup are not an OS sandbox. Command side
+effects are not captured by the file-write journal or automatically rolled back.
+
+Each check saves its command, exit status, duration, bounded output, and outcome
+under the run's `verification/<turn>/`. Failed checks return evidence to the agent
+for repair. Completed results are reused after interruption; a saved execution
+intent without a result becomes an unknown interrupted outcome, never an
+automatic replay. After a harness crash, inspect any surviving process before
+requesting another check.
+
+The final summary lists recorded outcomes and flags checks preceding later agent
+file edits as needing a rerun. External edits and command side effects are not
+tracked by this staleness flag. Passing commands do not certify every acceptance
+criterion or automatically accept the changes.
+
 ## Boundaries of this baseline
 
 This is a single-agent workflow, ready to extend behind provider and tool
-interfaces. It edits project files but does not execute shell commands, tests,
-Git operations, or deployments. A finished run has state `review_required` and
-marks acceptance criteria as unverified. Run suggested checks yourself before
-accepting changes.
+interfaces. It edits project files and can execute opt-in named verification
+commands on POSIX systems. It has no arbitrary shell, Git, or deployment tool. A
+finished run has state `review_required`: recorded command outcomes are evidence,
+while acceptance criteria still require human review.
 
 Traversal, symlinks, known credential paths, and writes to request/context,
 policy, Git, and audit files are blocked. File size, initial documentation size,

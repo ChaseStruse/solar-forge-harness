@@ -144,6 +144,46 @@ class VerificationTests(unittest.TestCase):
         self.assertIn('not certification', summary)
         self.assertIn('tests: passed', summary)
 
+    def test_timeout_terminates_descendants(self):
+        import time
+        child = 'import time; from pathlib import Path; time.sleep(2); Path("survived").write_text("bad")'
+        state = self.setup_run(
+            'import subprocess, sys, time; subprocess.Popen([sys.executable, "-c", ' + repr(child)
+            + ']); time.sleep(10)', timeout=1)
+        self.assertEqual(self.check(state)['status'], 'timed_out')
+        time.sleep(1.2)
+        self.assertFalse((self.ws.root / 'survived').exists())
+
+    def test_agent_requires_approval_before_checks(self):
+        self.setup_run('from pathlib import Path; Path("executed").touch()')
+        state = self.audit.load()
+        state['approved_plan'] = None
+        self.audit.save(state)
+        with self.assertRaisesRegex(ForgeError, 'not been approved'):
+            run(self.ws, self.cfg, self.audit, ScriptedProvider({'tool': 'run_check', 'name': 'tests'}))
+        self.assertFalse((self.ws.root / 'executed').exists())
+
+    def test_resume_attaches_saved_result_without_reexecuting(self):
+        state = self.setup_run('from pathlib import Path; p=Path("counter"); p.write_text(p.read_text()+"x" if p.exists() else "x")')
+        result = self.check(state)
+        state.update(status='interrupted', pending_action={'tool': 'run_check', 'name': 'tests'})
+        self.audit.save(state)
+        run(self.ws, self.cfg, self.audit, ScriptedProvider(
+            {'tool': 'finish', 'summary': 'Recovered.', 'verification': 'Review result.'}))
+        self.assertEqual(self.ws.read('counter'), 'x')
+        self.assertEqual(self.audit.load()['verification_results'], [result])
+
+    def test_checks_invalidate_previously_read_files(self):
+        self.setup_run('from pathlib import Path; Path("app.py").write_text("changed by check")')
+        self.ws.write('app.py', 'original')
+        run(self.ws, self.cfg, self.audit, ScriptedProvider(
+            {'tool': 'read_file', 'path': 'app.py'},
+            {'tool': 'run_check', 'name': 'tests'},
+            {'tool': 'write_file', 'path': 'app.py', 'content': 'overwrite'},
+            {'tool': 'finish', 'summary': 'Review.', 'verification': 'Review.'}))
+        self.assertEqual(self.ws.read('app.py'), 'changed by check')
+        self.assertIn('Read the current file before writing', self.audit.read('events.jsonl'))
+
     def test_config_validation_and_loading(self):
         invalid = [dict(commands={'test': 'python'}), dict(commands={'test': []}),
                    dict(commands={'bad name': ['python']}), dict(timeout=True),
