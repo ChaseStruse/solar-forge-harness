@@ -108,6 +108,20 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual((result['input_tokens'], result['output_tokens'], result['calls']), (12, 4, 3))
         self.assertIn('(partial)', format_progress(read_progress(self.audit)))
 
+    def test_cancelled_complete_fallback_keeps_reported_usage(self):
+        from threading import Event
+        stop = Event()
+        class Provider:
+            def complete(self, system, messages):
+                stop.set()
+                return ProviderText('Do not commit this reply', {'input_tokens': 6, 'output_tokens': 2})
+        visible = []
+        with self.assertRaisesRegex(ForgeError, 'Stopped'):
+            call(self.audit, Provider(), 'system', [], on_chunk=visible.append, cancelled=stop.is_set)
+        self.assertEqual(visible, [])
+        self.assertEqual(read_progress(self.audit)['usage']['input_tokens'], 6)
+        self.assertFalse(list((self.audit.path / 'calls').glob('*-output.txt')))
+
     def test_stream_usage_without_visible_final_text(self):
         provider = HTTPProvider(Config(model='test'))
         data = b'{"message":{"content":"Hi"},"done":false}\n{"done":true,"prompt_eval_count":7,"eval_count":2}\n'

@@ -11,6 +11,7 @@ The UI, workflow rules, transport, and file operations have separate modules.
 | --- | --- |
 | `cli.py` | Parse commands, display artifacts, prompt for answers and approval |
 | `domain.py` | Validate request headings and TOML configuration |
+| `progress.py` | Event-derived activity snapshots, observer delivery, elapsed work and usage summaries |
 | `personality.py` | Load the shared packaged voice for chat and structured model prompts |
 | `standards.py` | Bounded language detection and composition of packaged coding-standard templates |
 | `context.py` | Load explicit documentation and bundled guidance with provenance |
@@ -189,7 +190,7 @@ flag. Acceptance criteria still need human review.
    timeout/output budgets, and tests proving workspace/network isolation.
 2. Build an acceptance verifier that attaches actual command and artifact
    evidence before transitioning from review to completion.
-3. Add streaming adapters, cancellation, usage reporting, and semantic retrieval.
+3. Add streaming adapters, cancellation, richer usage/cost reporting, and semantic retrieval.
 4. Add Git and deployment tools with separate reviewable approval records.
 5. Introduce project-level locking and optional coordinated agents only after
    defining ownership of shared files, decisions, and audit artifacts.
@@ -218,3 +219,27 @@ exact personality text used for each call. The task-specific instructions follow
 the personality and retain JSON-only output, approval, and evidence requirements.
 Personality is conversational guidance; it does not execute actions or replace
 project coding standards. Scripted tests verify integration, not live-model tone.
+
+## Live progress and provider usage
+
+Audit events reduce into a bounded `progress.json` sidecar independently of run
+state. Observer delivery uses a context-local callback scoped to the UI's worker
+invocation; the terminal schedules updates on its event loop. A quarter-second
+refresh updates active elapsed time without repeatedly loading audit histories.
+Callbacks and progress persistence are best-effort and cannot authorize actions
+or overwrite workflow checkpoints. The UI strips control sequences and bounds
+panel line widths; no source contents or raw provider payloads enter the snapshot.
+
+ProviderText preserves the provider's string response interface and attaches
+per-response normalized usage. Ollama's terminal stream frame can carry usage
+without visible text. Usage is persisted with the call outcome even when response
+validation rejects the text. There is no mutable last-response counter on the
+provider, avoiding stale usage across calls. Custom adapters returning plain strings
+remain compatible and show unavailable counts. Claude input normalization includes
+its cache read/write token fields; other adapters use their aggregate input counts.
+
+Active duration accumulates provider-call and tool intervals. Waiting on people is
+excluded. A resumed unfinished interval ends at its last recorded timestamp rather
+than counting the gap as active work. Existing runs lacking snapshots start new
+metrics with an explicit historical-coverage warning. Snapshots do not reconstruct
+old token usage, imply that an abandoned process is alive, or replace saved diffs.

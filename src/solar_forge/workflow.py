@@ -58,7 +58,12 @@ def call(audit: Audit, provider: Provider, system: str, messages: list[dict], ma
             raise ForgeError('Stopped by user.')
         if on_chunk is not None:
             stream = getattr(provider, 'stream', None)
-            chunks = stream(system, messages) if stream else iter([provider.complete(system, messages)])
+            if stream:
+                chunks = stream(system, messages)
+            else:
+                response = provider.complete(system, messages)
+                usage = getattr(response, 'usage', None)
+                chunks = iter([response])
             try:
                 while True:
                     if cancelled and cancelled():

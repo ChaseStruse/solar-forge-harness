@@ -50,7 +50,8 @@ class TerminalChat:
             ConditionalContainer(Frame(self.history, title='Saved chats'),
                                  filter=Condition(lambda: self.app.output.get_size().columns >= 85)),
             HSplit([Frame(self.conversation, title=lambda: display(self.current['title']) if self.current else 'New chat'),
-                    Label(lambda: display(self.current.get('workflow_hint', '') if self.current else
+                    Label(lambda: display('Working… Ctrl+X requests a stop.' if self.busy else
+                                          self.current.get('workflow_hint', '') if self.current else
                                           'Start: /request or /prepare. Continue: /runs. Help: /help.'),
                           style='class:workflow'),
                     ConditionalContainer(

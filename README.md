@@ -408,6 +408,48 @@ audit artifacts under your project's version-control and retention policy.
 `state.json` is authoritative; Markdown artifacts are readable views. Events and
 saved calls retain earlier plans even when `plan.md` is replaced.
 
+## Follow work as it happens
+
+Terminal chat includes an **Activity** panel that updates while Forge is working:
+
+- Current action, such as waiting for the model, reading/writing a file, searching
+  reference documents, or running a named check.
+- Unique files changed through the coding file tool, with the two most recent
+  paths in the compact view. Use `/changes` for the complete saved diffs.
+- Latest check outcome and exit code, with a rerun reminder after later file edits.
+- Cumulative active time for the displayed chat or coding run, excluding time
+  waiting for your answers or approval.
+- Cumulative provider-reported input/output tokens for that chat or run.
+
+The panel refreshes every quarter second, including while a model call is waiting.
+Press **Ctrl+X** to request a stop. The panel acknowledges the request; verification
+processes can be terminated, while a blocking network read may finish or time out
+before control returns. **Ctrl+Q** keeps its existing behavior of waiting for the
+active action to save before closing. The panel keeps the completed activity and
+reloads saved run information when a chat is reopened. `/status` and `forge status`
+include a saved activity summary; these status commands are not live monitors.
+
+Usage is reported when the provider supplies it, usually at the end of a response.
+Unavailable counters are labelled `unavailable`; totals covering only some calls
+or fields are labelled `partial`. Failed or rejected responses count when usage was
+reported. Counts are not cost estimates or token-by-token streaming counters.
+Responses and compatible APIs use their reported input/output or prompt/completion
+fields; see [OpenAI token counting](https://developers.openai.com/api/docs/guides/token-counting)
+and the [Chat Completions reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+Claude input totals include the separately reported cache reads and writes, as
+specified in its [prompt caching documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+Ollama uses its reported prompt-evaluation and generation counts from the
+[chat response](https://docs.ollama.com/api/chat).
+
+Each run saves a compact `progress.json` alongside its existing event log, plus
+`calls/<id>-usage.json` for completed or failed calls (`null` when unavailable).
+Snapshots are best-effort display data; workflow state and action evidence remain
+separate. Older runs have no historical metrics reconstructed; if resumed, the
+panel labels earlier activity unavailable. An unfinished saved action is shown as
+“Last recorded” when reopened, not assumed to still be running. After a hard crash,
+unknown active time is not counted as time spent working. Changed-file tracking
+covers recorded file-tool changes, not arbitrary test-command side effects.
+
 ## Search local documents with RAG
 
 Forge can retrieve relevant passages from a local document library for chat,
